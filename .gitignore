@@ -1,0 +1,23 @@
+# Ambiente virtuale
+.venv/
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# DB locali
+*.db
+
+# Dati e log runtime
+data/
+logs/
+
+# Config locali
+.env
+.env.local
+
+# IDE/editor
+.vscode/
+.idea/

@@ -1,0 +1,601 @@
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\main.py =====
+from fastapi import FastAPI
+
+from app.api import health, signals, orders, positions, market
+from app.core.logging import setup_logging
+from app.core.scheduler import start_scheduler  # ⬅️ nuovo import
+from app.db.models import Base
+from app.db.session import engine
+
+# inizializza logging JSON
+setup_logging()
+
+# istanza FastAPI
+app = FastAPI(title="CryptoNakCore LOMS", version="0.1.0")
+
+
+# crea le tabelle al bootstrap dell'app
+@app.on_event("startup")
+def on_startup():
+    Base.metadata.create_all(bind=engine)
+
+
+# avvia lo scheduler per l'auto-close delle posizioni
+start_scheduler(app)  # ⬅️ questa riga aggancia il task periodico all'app
+
+
+# registra i router
+app.include_router(health.router)
+app.include_router(signals.router, prefix="/signals", tags=["signals"])
+app.include_router(orders.router, prefix="/orders", tags=["orders"])
+app.include_router(positions.router, prefix="/positions", tags=["positions"])
+app.include_router(market.router, prefix="/market", tags=["market"])
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "CryptoNakCore LOMS"}
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\api\health.py =====
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/health")
+async def health():
+    return {"ok": True, "service": "CryptoNakCore LOMS"}
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\api\market.py =====
+from fastapi import APIRouter
+from app.services.market import set_market_price, get_market_price
+
+router = APIRouter()
+
+@router.post("/price/{value}")
+def update_price(value: float):
+    set_market_price(value)
+    return {"new_market_price": value}
+
+@router.get("/price")
+def read_price():
+    return {"market_price": get_market_price()}
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\api\orders.py =====
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.db.session import SessionLocal
+from app.db.models import Order as OrderModel, Position as PositionModel
+
+router = APIRouter()
+
+
+# ---------- Pydantic models ----------
+
+class OrderRequest(BaseModel):
+    symbol: str
+    side: str            # "long" / "short"
+    qty: float
+    entry_price: float   # prezzo di ingresso paper
+    tp_price: float | None = None  # Take Profit
+    sl_price: float | None = None  # Stop Loss
+    order_type: str = "market"
+
+
+
+class OrderResponse(BaseModel):
+    id: int
+    symbol: str
+    side: str
+    qty: float
+    order_type: str
+    tp_price: float | None
+    sl_price: float | None
+    status: str
+
+    class Config:
+        from_attributes = True
+
+
+# ---------- Dependency DB ----------
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ---------- Endpoints ----------
+
+@router.post("/", response_model=OrderResponse)
+async def create_order(order: OrderRequest, db: Session = Depends(get_db)):
+    """
+    Crea un ordine 'paper' nel DB
+    e apre una posizione con lo stesso simbolo/side/qty/entry_price,
+    propagando TP/SL.
+    """
+
+    # 1) salva l'ordine con TP/SL
+    db_order = OrderModel(
+        symbol=order.symbol,
+        side=order.side,
+        qty=order.qty,
+        order_type=order.order_type,
+        tp_price=order.tp_price,
+        sl_price=order.sl_price,
+        status="created",
+    )
+    db.add(db_order)
+    db.commit()
+    db.refresh(db_order)
+
+    # 2) crea anche una posizione aperta con TP/SL
+    db_position = PositionModel(
+        symbol=order.symbol,
+        side=order.side,
+        qty=order.qty,
+        entry_price=order.entry_price,
+        tp_price=order.tp_price,
+        sl_price=order.sl_price,
+        status="open",
+    )
+    db.add(db_position)
+    db.commit()
+
+    return db_order
+
+
+
+
+@router.get("/", response_model=list[OrderResponse])
+async def list_orders(db: Session = Depends(get_db)):
+    """
+    Restituisce tutti gli ordini (più recenti per primi).
+    """
+    orders = db.query(OrderModel).order_by(OrderModel.id.desc()).all()
+    return orders
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\api\positions.py =====
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.db.session import SessionLocal
+from app.db.models import Position as PositionModel
+
+router = APIRouter()
+
+
+# ------------ Pydantic ------------
+
+class PositionResponse(BaseModel):
+    id: int
+    symbol: str
+    side: str
+    qty: float
+    entry_price: float | None
+    tp_price: float | None
+    sl_price: float | None
+    status: str
+
+    class Config:
+        from_attributes = True
+
+
+# ------------ Dependency DB ------------
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ------------ Endpoints ------------
+
+@router.get("/", response_model=list[PositionResponse])
+async def list_positions(db: Session = Depends(get_db)):
+    """
+    Lista tutte le posizioni aperte (per ora lista completa).
+    """
+    positions = db.query(PositionModel).all()
+    return positions
+
+@router.post("/{position_id}/close", response_model=PositionResponse)
+async def close_position(position_id: int, db: Session = Depends(get_db)):
+    """
+    Chiude una posizione (status -> 'closed').
+    """
+    position = db.query(PositionModel).filter(PositionModel.id == position_id).first()
+
+    if position is None:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    if position.status == "closed":
+        # è già chiusa, restituiamo comunque l'oggetto
+        return position
+
+    position.status = "closed"
+    db.commit()
+    db.refresh(position)
+    return position
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\api\signals.py =====
+from datetime import datetime
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from app.services.audit import log_bounce_signal
+
+router = APIRouter()
+
+
+class BounceSignal(BaseModel):
+    symbol: str
+    side: str  # "long" or "short"
+    price: float
+    timestamp: datetime
+
+
+@router.post("/bounce")
+async def receive_bounce_signal(signal: BounceSignal):
+    # mode="json" converte automaticamente i datetime in stringhe ISO
+    payload = signal.model_dump(mode="json")
+
+    log_bounce_signal(payload)
+
+    return {"received": True}
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\api\__init__.py =====
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\core\config.py =====
+from pathlib import Path
+
+from pydantic_settings import BaseSettings  # per Pydantic v2
+
+
+# BASE_DIR = root del servizio cryptonakcore (dove ci sono app/, data/, ecc.)
+BASE_DIR = Path(__file__).resolve().parents[2]
+
+
+class Settings(BaseSettings):
+    DATABASE_URL: str = "sqlite:///./cryptonakcore_loms.db"
+    JWT_SECRET: str = "dev-secret"
+
+    # file dove salviamo i segnali di bounce in formato JSON Lines
+    AUDIT_LOG_PATH: str = str(BASE_DIR / "data" / "bounce_signals.jsonl")
+
+    class Config:
+        env_file = ".env"
+
+
+settings = Settings()
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\core\logging.py =====
+import logging
+import sys
+import json
+
+def setup_logging():
+    class JSONFormatter(logging.Formatter):
+        def format(self, record):
+            log = {
+                "level": record.levelname,
+                "message": record.getMessage(),
+                "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+                "logger": record.name,
+            }
+            return json.dumps(log)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\core\scheduler.py =====
+import asyncio
+from fastapi import FastAPI
+from sqlalchemy.orm import Session
+from app.db.session import SessionLocal
+from app.services.oms import auto_close_positions
+
+
+async def position_watcher():
+    """Loop infinito per controllare le posizioni ogni 1 secondo."""
+    while True:
+        db: Session = SessionLocal()
+        try:
+            auto_close_positions(db)
+        finally:
+            db.close()
+
+        await asyncio.sleep(1)  # 1 secondo
+
+
+def start_scheduler(app: FastAPI):
+
+    @app.on_event("startup")
+    async def start_background_tasks():
+        asyncio.create_task(position_watcher())
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\core\__init__.py =====
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\db\models.py =====
+from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Float, func
+
+# Base comune per tutti i modelli ORM
+Base = declarative_base()
+
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    symbol = Column(String, index=True, nullable=False)    # es. "BTCUSDT"
+    side = Column(String, nullable=False)                  # "long" / "short"
+    qty = Column(Float, nullable=False)
+    order_type = Column(String, default="market")
+
+    # TP / SL opzionali
+    tp_price = Column(Float, nullable=True)
+    sl_price = Column(Float, nullable=True)
+
+    status = Column(String, default="created")             # "created", "filled", "canceled"
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Position(Base):
+    __tablename__ = "positions"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    symbol = Column(String, index=True, nullable=False)
+    side = Column(String, nullable=False)
+    qty = Column(Float, nullable=False)
+    entry_price = Column(Float, nullable=False)
+
+    # TP / SL della posizione
+    tp_price = Column(Float, nullable=True)
+    sl_price = Column(Float, nullable=True)
+
+    status = Column(String, default="open")
+    take_profit = Column(Numeric(18, 8), nullable=True)
+    stop_loss = Column(Numeric(18, 8), nullable=True)                # "open", "closed"
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\db\session.py =====
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from app.core.config import settings
+
+# Base per tutti i modelli ORM (models.py la importerà da qui)
+Base = declarative_base()
+
+# Se usi SQLite, serve il flag check_same_thread=False
+connect_args = {}
+
+if settings.DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+
+# Crea l'engine collegato al database
+engine = create_engine(
+    settings.DATABASE_URL,
+    connect_args=connect_args
+)
+
+# Factory delle sessioni
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\db\__init__.py =====
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\services\audit.py =====
+import json
+from datetime import datetime
+from pathlib import Path
+
+from app.core.config import settings
+
+# Path del file JSONL dove salviamo i segnali di bounce
+LOG_PATH = Path(settings.AUDIT_LOG_PATH)
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def log_bounce_signal(signal: dict) -> None:
+    """
+    Salva un segnale di bounce come riga JSON nel file audit.
+    """
+    entry = {
+        "type": "bounce_signal",
+        "ts": datetime.utcnow().isoformat(),
+        "payload": signal,
+    }
+    with LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\services\market.py =====
+
+# app/services/market.py
+from typing import Optional
+
+# Prezzo di mercato simulato (parte da 60000)
+market_price: float = 60000.0
+
+def get_market_price() -> float:
+    """Ritorna il prezzo di mercato simulato."""
+    return market_price
+
+def set_market_price(price: float):
+    """Setta manualmente il prezzo simulato (per test)."""
+    global market_price
+    market_price = price
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\services\market_simulator.py =====
+import random
+
+class MarketSimulator:
+    @staticmethod
+    def get_price(sym: str) -> float:
+        # Placeholder: fluttua leggermente
+        base = 100
+        variation = random.uniform(-0.3, 0.3)
+        return base + variation
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\services\oms.py =====
+from datetime import datetime
+import logging
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from app.db.models import Position
+from app.services.market_simulator import MarketSimulator
+
+logger = logging.getLogger("oms")
+
+
+def _normalize_side(side: str) -> str:
+    """
+    Normalizza il side della posizione:
+    - "buy"  / "long"  → "long"
+    - "sell" / "short" → "short"
+    """
+    s = (side or "").lower()
+    if s in ("buy", "long"):
+        return "long"
+    if s in ("sell", "short"):
+        return "short"
+    return s
+
+
+def auto_close_positions(db: Session) -> None:
+    """
+    Controlla tutte le posizioni aperte e le chiude in modalità paper
+    quando il prezzo simulato raggiunge TP (tp_price) o SL (sl_price).
+    Le posizioni più giovani di 7 secondi NON vengono chiuse.
+    """
+
+    open_positions = db.query(Position).filter(Position.status == "open").all()
+    now = datetime.utcnow()  # momento attuale, usato per calcolare l'età
+
+    for pos in open_positions:
+        # ⏱️ NON chiudere posizioni create da meno di 7 secondi
+        if pos.created_at is not None:
+            age_sec = (now - pos.created_at).total_seconds()
+            if age_sec < 7:
+                continue
+
+        # Se non ha né TP né SL non c'è nulla da fare
+        if pos.tp_price is None and pos.sl_price is None:
+            continue
+
+        # Prezzo corrente dal market simulator
+        price = MarketSimulator.get_price(pos.symbol)
+        current_price = float(price)
+
+        # Converte TP/SL in float se presenti
+        tp: Optional[float] = float(pos.tp_price) if pos.tp_price is not None else None
+        sl: Optional[float] = float(pos.sl_price) if pos.sl_price is not None else None
+
+        side = _normalize_side(pos.side)
+
+        hit_tp = False
+        hit_sl = False
+
+        if tp is not None:
+            if side == "long":
+                hit_tp = current_price >= tp
+            elif side == "short":
+                hit_tp = current_price <= tp
+
+        if sl is not None:
+            if side == "long":
+                hit_sl = current_price <= sl
+            elif side == "short":
+                hit_sl = current_price >= sl
+
+        # Nessun trigger → continua
+        if not (hit_tp or hit_sl):
+            continue
+
+        reason = "tp" if hit_tp else "sl"
+
+        # ✅ NIENTE Order di chiusura per ora, aggiorniamo solo la Position
+        pos.status = "closed"
+        pos.closed_at = now
+        pos.close_price = current_price
+
+        # Calcolo PnL
+        entry = float(pos.entry_price)
+        qty = float(pos.qty)
+
+        if side == "long":
+            pos.pnl = (current_price - entry) * qty
+        else:  # short
+            pos.pnl = (entry - current_price) * qty
+
+        db.commit()
+
+        logger.info(
+            {
+                "event": "position_closed",
+                "reason": reason,
+                "symbol": pos.symbol,
+                "entry": entry,
+                "exit": current_price,
+                "pnl": float(pos.pnl),
+                "qty": qty,
+                "pos_id": pos.id,
+            }
+        )
+
+
+
+===== FILE: C:\Projects\cryptonakcore-loms\services\cryptonakcore\app\services\__init__.py =====
+
+
+
