@@ -1,7 +1,7 @@
 # CryptoNakCore LOMS – Jira Checklist MASTER
 
 Versione aggiornata al 2025-11-27  
-(Stato: dopo integrazione `notify_bounce_alert` → LOMS + `MarketSimulator` v2)
+(Stato: dopo integrazione `notify_bounce_alert` → LOMS + `MarketSimulator` v2 + **primo alert reale end-to-end**)
 
 Legenda stato:  
 ✅ completato  
@@ -572,37 +572,39 @@ LOMS_ENABLED=true in locale,
 LOMS_ENABLED=false su Hetzner (documentato in README / runbook).
 
 9.3 Step 3 – Test end-to-end locale (RickyBot → LOMS → /stats) con alert reali
-⬜ Obiettivo: validare che tutta la catena funzioni in locale con il runner reale, non solo con gli script di test.
+✅ Completato (primo test con alert reale KGENUSDT)
 
-Scenario di test:
+Obiettivo: validare che tutta la catena funzioni in locale con il runner reale, non solo con gli script di test.
 
-Avviare LOMS in locale:
+Scenario eseguito:
 
-uvicorn app.main:app --reload,
+Avviato LOMS in locale con:
 
-OMS_ENABLED=true.
-
-Lanciare RickyBot in locale con:
+bash
+Copia codice
+uvicorn app.main:app --reload
+# OMS_ENABLED=true
+Lanciato RickyBot in locale con:
 
 LOMS_ENABLED=true,
 
-preset di test (timeframe corto, magari simboli limitati).
+preset di test (GAINERS_PERP 5m su Bitget, top_n piccolo).
 
-Verificare che:
+Verificato che, su un alert reale Bounce Strict (es. KGENUSDT short):
 
-ad ogni alert Bounce Strict il runner chiami notify_bounce_alert,
+il runner chiama notify_bounce_alert,
 
-notify_bounce_alert invii il segnale al LOMS,
+notify_bounce_alert invia il segnale al LOMS,
 
-LOMS crei ordini/posizioni,
+LOMS crea Order + Position (con order_id e position_id),
 
-il watcher auto_close_positions chiuda le posizioni dopo ~7s (auto_close_reason="tp" / "sl").
+il watcher auto_close_positions chiude la posizione dopo ~7s con auto_close_reason="tp" o "sl".
 
-Controllare i risultati:
+Risultati controllati tramite:
 
-tramite GET /stats,
+GET /positions (position con status="closed" e auto_close_reason="sl"),
 
-e con python tools/print_stats.py per vedere:
+GET /stats e python tools/print_stats.py per:
 
 total_positions, open_positions, closed_positions,
 
