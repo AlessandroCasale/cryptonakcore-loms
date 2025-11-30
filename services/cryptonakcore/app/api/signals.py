@@ -94,43 +94,12 @@ async def receive_bounce_signal(
             "reason": "OMS disabled via config",
         }
 
-    # 3) Controllo limiti di rischio base (numero posizioni aperte)
-    risk_ok, risk_reason = check_risk_limits(db, signal.symbol)
-    if not risk_ok:
-        # NON apriamo ordine/posizione, ma segnaliamo il blocco
-        logger.info(
-            {
-                "event": "bounce_risk_block",
-                "symbol": signal.symbol,
-                "side": signal.side,
-                "risk_reason": risk_reason,
-            }
-        )
-        return {
-            "received": True,
-            "oms_enabled": True,
-            "risk_ok": False,
-            "risk_reason": risk_reason,
-        }
-
-    # 4) Calcolo TP/SL in base a price e percentuali
+    # 3) Normalizza side e prezzo di ingresso
     entry_price = float(signal.price)
     side = _normalize_side(signal.side)
 
-    tp_pct = signal.tp_pct if signal.tp_pct is not None else DEFAULT_TP_PCT
-    sl_pct = signal.sl_pct if signal.sl_pct is not None else DEFAULT_SL_PCT
-
-    tp_price: float | None
-    sl_price: float | None
-
-    if side == "long":
-        tp_price = entry_price * (1.0 + tp_pct / 100.0)
-        sl_price = entry_price * (1.0 - sl_pct / 100.0) if sl_pct is not None else None
-    elif side == "short":
-        tp_price = entry_price * (1.0 - tp_pct / 100.0)
-        sl_price = entry_price * (1.0 + sl_pct / 100.0) if sl_pct is not None else None
-    else:
-        # per ora, se side non è valido, non apriamo nulla
+    if side not in ("long", "short"):
+        # Per ora, se side non è valido, non apriamo nulla
         logger.info(
             {
                 "event": "bounce_invalid_side",
@@ -146,8 +115,66 @@ async def receive_bounce_signal(
         }
 
     qty = DEFAULT_QTY
+    notional_usdt = entry_price * qty
 
-    # 5) Crea ordine paper
+    # 4) Controllo limiti di rischio base (numero posizioni aperte + size per posizione)
+    risk_ok, risk_reason = check_risk_limits(
+        db,
+        symbol=signal.symbol,
+        entry_price=entry_price,
+        qty=qty,
+    )
+    if not risk_ok:
+        # NON apriamo ordine/posizione, ma segnaliamo il blocco
+        logger.info(
+            {
+                "event": "bounce_risk_block",
+                "symbol": signal.symbol,
+                "side": side,
+                "risk_reason": risk_reason,
+                "entry_price": entry_price,
+                "qty": qty,
+                "notional_usdt": notional_usdt,
+            }
+        )
+        return {
+            "received": True,
+            "oms_enabled": True,
+            "risk_ok": False,
+            "risk_reason": risk_reason,
+        }
+
+    # 5) Calcolo TP/SL in base a price e percentuali
+    tp_pct = signal.tp_pct if signal.tp_pct is not None else DEFAULT_TP_PCT
+    sl_pct = signal.sl_pct if signal.sl_pct is not None else DEFAULT_SL_PCT
+
+    tp_price: float | None
+    sl_price: float | None
+
+    if side == "long":
+        tp_price = entry_price * (1.0 + tp_pct / 100.0)
+        sl_price = entry_price * (1.0 - sl_pct / 100.0) if sl_pct is not None else None
+    elif side == "short":
+        tp_price = entry_price * (1.0 - tp_pct / 100.0)
+        sl_price = entry_price * (1.0 + sl_pct / 100.0) if sl_pct is not None else None
+    else:
+        # Questo blocco dovrebbe essere teoricamente irraggiungibile perché filtriamo sopra,
+        # ma lo lasciamo per sicurezza.
+        logger.info(
+            {
+                "event": "bounce_invalid_side_post_tp_sl",
+                "symbol": signal.symbol,
+                "raw_side": signal.side,
+            }
+        )
+        return {
+            "received": True,
+            "oms_enabled": True,
+            "risk_ok": False,
+            "error": "invalid_side",
+        }
+
+    # 6) Crea ordine paper
     db_order = OrderModel(
         symbol=signal.symbol,
         side=side,
@@ -161,7 +188,7 @@ async def receive_bounce_signal(
     db.commit()
     db.refresh(db_order)
 
-    # 6) Crea posizione paper associata
+    # 7) Crea posizione paper associata
     db_position = PositionModel(
         symbol=signal.symbol,
         side=side,
@@ -184,6 +211,9 @@ async def receive_bounce_signal(
             "position_id": db_position.id,
             "tp_price": tp_price,
             "sl_price": sl_price,
+            "entry_price": entry_price,
+            "qty": qty,
+            "notional_usdt": notional_usdt,
         }
     )
 

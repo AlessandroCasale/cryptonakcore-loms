@@ -25,12 +25,22 @@ def _normalize_side(side: str) -> str:
     return s
 
 
-def check_risk_limits(db: Session, symbol: str) -> tuple[bool, str | None]:
+def check_risk_limits(
+    db: Session,
+    symbol: str,
+    entry_price: Optional[float] = None,
+    qty: Optional[float] = None,
+) -> tuple[bool, str | None]:
     """
     Controlla i limiti di rischio base (paper), letti da Settings/env:
 
     - MAX_OPEN_POSITIONS: massimo numero di posizioni aperte in totale
     - MAX_OPEN_POSITIONS_PER_SYMBOL: massimo numero di posizioni aperte per simbolo
+    - MAX_SIZE_PER_POSITION_USDT: size massima (notional) per posizione in USDT
+
+    Parametri opzionali:
+    - entry_price, qty: se presenti, viene controllato anche il limite di size
+      (entry_price * qty <= MAX_SIZE_PER_POSITION_USDT).
 
     Ritorna:
     - (True, None) se si può aprire una nuova posizione
@@ -39,6 +49,7 @@ def check_risk_limits(db: Session, symbol: str) -> tuple[bool, str | None]:
 
     max_total = settings.MAX_OPEN_POSITIONS
     max_per_symbol = settings.MAX_OPEN_POSITIONS_PER_SYMBOL
+    max_size_usdt = settings.MAX_SIZE_PER_POSITION_USDT
 
     # Tutte le posizioni aperte
     base_q = db.query(Position).filter(Position.status == "open")
@@ -78,6 +89,34 @@ def check_risk_limits(db: Session, symbol: str) -> tuple[bool, str | None]:
             }
         )
         return False, reason
+
+    # Controllo limite di size (notional) per posizione, se abbiamo i dati necessari
+    if (
+        max_size_usdt is not None
+        and max_size_usdt > 0
+        and entry_price is not None
+        and qty is not None
+    ):
+        notional = float(entry_price) * float(qty)
+
+        if notional > max_size_usdt:
+            reason = (
+                "max_size_per_position_exceeded "
+                f"(notional={notional:.4f}, limit={max_size_usdt:.4f})"
+            )
+            logger.info(
+                {
+                    "event": "risk_block",
+                    "scope": "size",
+                    "symbol": symbol,
+                    "entry_price": float(entry_price),
+                    "qty": float(qty),
+                    "notional": notional,
+                    "limit": float(max_size_usdt),
+                    "reason": reason,
+                }
+            )
+            return False, reason
 
     # Tutto ok, si può aprire
     return True, None

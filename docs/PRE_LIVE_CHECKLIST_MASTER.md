@@ -66,21 +66,21 @@ rollback immediato.
 
 ### 3.1 Risk LOMS
 
+### 3.1 Risk LOMS
+
 - [x] Parametri da env letti in `Settings`:
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
-  - [x] `MAX_SIZE_PER_POSITION_USDT` (solo definito, non usato).
+  - [x] `MAX_SIZE_PER_POSITION_USDT`
 
 - [x] `check_risk_limits`:
   - [x] usa `MAX_OPEN_POSITIONS`,
   - [x] usa `MAX_OPEN_POSITIONS_PER_SYMBOL`,
+  - [x] integra `MAX_SIZE_PER_POSITION_USDT` come limite sulla size notional
+        (`entry_price * qty`), con log `risk_block` scope `"size"`,
   - [x] logga `risk_block` con motivo,
-  - [x] accetta `None` come “nessun limite” (TODO da confermare se serve).
+  - [x] accetta `None` come “nessun limite” (se in futuro lo vorrai usare così).
 
-- [ ] Integrare `MAX_SIZE_PER_POSITION_USDT`:
-  - [ ] calcolare size stimata in USDT per nuovo ordine/posizione,
-  - [ ] bloccare se supera il limite,
-  - [ ] loggare motivo (es. `risk_block size_limit`).
 
 ### 3.2 Risk RickyBot (futuro)
 
