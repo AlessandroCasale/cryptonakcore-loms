@@ -108,23 +108,29 @@ chiusura posizione:
 
 ### 2.4 Risk engine base
 
-🟡 Parzialmente completo
+✅ Completato (prima versione)
 
-✅ Esiste un controllo base che può bloccare l’apertura di nuove posizioni con:
+- Funzione `check_risk_limits(db, symbol)` in `app.services.oms`:
+  - legge i limiti da `settings` (env):
+    - `MAX_OPEN_POSITIONS_TOTAL`
+    - `MAX_OPEN_POSITIONS_PER_SYMBOL`
+  - conta le posizioni `open` totali e per singolo `symbol`,
+  - se il limite totale è superato → ritorna `risk_ok=False` con reason
+    `max_total_open_reached (total=..., limit=...)`,
+  - se il limite per simbolo è superato → ritorna `risk_ok=False` con reason
+    `max_symbol_open_reached (symbol=..., count=..., limit=...)`.
 
-- risposta tipo  
-  `risk_ok: false`,  
-  `risk_reason: "max_total_open_reached (total=1, limit=1)"`.
+- Logging strutturato:
+  - evento `risk_block` con:
+    - `scope` = `"total"` o `"symbol"`,
+    - `symbol`,
+    - `total_open` / `open_for_symbol`,
+    - `limit`.
 
-✅ `/signals/bounce` include sempre `risk_ok` e `risk_reason` nella risposta.
-
-✅ Lato RickyBot, i blocchi risk vengono loggati come `event: "loms_risk_reject"`.
-
-Da completare:
-
-⬜ leggere i limiti (es. `MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`) da settings/env,  
-⬜ introdurre davvero il limite per simbolo (`max_symbol_open_reached`) se non ancora presente,  
-⬜ log dedicati `risk_block` più dettagliati (scope totale / per simbolo).
+- L’endpoint `/signals/bounce`:
+  - usa `check_risk_limits` prima di creare Order/Position,
+  - risponde sempre con `risk_ok` e `risk_reason` (quando bloccato),
+  - in caso di blocco NON crea nessun ordine/posizione.
 
 ---
 
@@ -238,15 +244,9 @@ Chiusura manuale completa:
 
 ✅ Integrazione risk engine base:
 
+- usa `check_risk_limits` per i limiti totali/per simbolo,
 - risponde sempre con `risk_ok` e `risk_reason`,
 - se i limiti sono superati → nessun ordine/posizione, risposta 200 con `risk_ok: false`.
-
-✅ Risposte tipiche:
-
-- se `OMS_ENABLED = true` e passano i controlli →  
-  `{ "received": true, "oms_enabled": true, "risk_ok": true, "order_id": ..., "position_id": ..., "tp_price": ..., "sl_price": ... }`
-- se `OMS_ENABLED = false` →  
-  `{ "received": true, "oms_enabled": false, "risk_ok": false, "reason": "OMS disabled via config" }`
 
 ⬜ Validazioni aggiuntive:
 
@@ -297,6 +297,8 @@ Chiusura manuale completa:
 - `JWT_SECRET`
 - `AUDIT_LOG_PATH`
 - `OMS_ENABLED`
+- `MAX_OPEN_POSITIONS_TOTAL`
+- `MAX_OPEN_POSITIONS_PER_SYMBOL`
 
 ### 5.2 Flag `OMS_ENABLED`
 
@@ -313,9 +315,20 @@ Chiusura manuale completa:
 - log path diversi,
 - valori diversi di `OMS_ENABLED` e parametri core.
 
-### 5.4 `.env.example`
+### 5.4 `.env.sample` / `.env.example`
 
-⬜ File di esempio documentato per configurazione rapida.
+🟡 Parzialmente completo
+
+✅ File `services/cryptonakcore/.env.sample` creato con i campi minimi:
+
+- `ENVIRONMENT`
+- `DATABASE_URL`
+- `AUDIT_LOG_PATH`
+- `OMS_ENABLED`
+- `MAX_OPEN_POSITIONS_TOTAL`
+- `MAX_OPEN_POSITIONS_PER_SYMBOL`
+
+⬜ Valutare se aggiungere anche un `.env.example` in root o una sezione dedicata nel README che punti esplicitamente a `.env.sample` come modello per la configurazione rapida.
 
 ---
 
@@ -598,7 +611,8 @@ notify_bounce_alert invia il segnale al LOMS,
 
 LOMS crea Order + Position (con order_id e position_id),
 
-il watcher auto_close_positions chiude la posizione dopo ~7s con auto_close_reason="tp" o "sl".
+il watcher auto_close_positions chiude la posizione dopo ~7s con
+auto_close_reason="tp" o "sl".
 
 Risultati controllati tramite:
 
@@ -610,4 +624,4 @@ total_positions, open_positions, closed_positions,
 
 winning_trades, losing_trades, tp_count, sl_count,
 
-total_pnl, winrate, avg_pnl_per_trade, avg_pnl_win, avg_pnl_loss
+total_pnl, winrate, avg_pnl_per_trade, avg_pnl_win, avg_pnl_loss.

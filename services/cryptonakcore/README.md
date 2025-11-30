@@ -66,13 +66,14 @@ Pydantic per validazione richieste/risposte
 
 Scheduler interno per auto_close_positions (simulazione TP/SL)
 
-3. Quickstart (dev locale)
+Quickstart (dev locale)
 3.1 Prerequisiti
 Python 3.11+ (consigliato)
 
 pip / venv
 
 3.2 Setup ambiente
+
 bash
 Copia codice
 cd cryptonakcore-loms
@@ -89,6 +90,7 @@ source .venv/bin/activate
 # installa dipendenze
 pip install -r requirements.txt
 3.3 Avvio server
+
 bash
 Copia codice
 uvicorn services.cryptonakcore.app.main:app --reload
@@ -100,7 +102,32 @@ Swagger UI → http://127.0.0.1:8000/docs
 
 ReDoc → http://127.0.0.1:8000/redoc
 
-4. API principali (overview)
+3.4 Comandi rapidi di controllo (dev locale)
+Dopo aver avviato il server in locale, hai tre comandi veloci per verificare che tutto sia ok:
+
+Health check del servizio
+
+bash
+Copia codice
+python tools/check_health.py
+Snapshot veloce delle statistiche OMS
+
+bash
+Copia codice
+python tools/print_stats.py
+Tail dei log audit (se AUDIT_LOG_PATH=logs/oms_audit.jsonl)
+
+PowerShell:
+
+powershell
+Copia codice
+Get-Content -Path .\logs\oms_audit.jsonl -Wait
+Bash:
+
+bash
+Copia codice
+tail -f logs/oms_audit.jsonl
+API principali (overview)
 Più in dettaglio lo vedi da /docs, qui la mappa mentale:
 
 GET /health
@@ -136,7 +163,7 @@ avg_pnl_loss,
 
 tp_count, sl_count, ecc.
 
-5. Contratto /signals/bounce
+Contratto /signals/bounce
 Questo è il contratto chiave usato da RickyBot (via loms_client) per notificare un segnale.
 
 5.1 Request (BounceSignal)
@@ -226,7 +253,8 @@ position_id (int | null) – ID posizione creata.
 
 tp_price / sl_price (float | null) – livelli prezzo usati per TP/SL.
 
-6. Posizioni, ordini e stats
+Posizioni, ordini e stats
+
 6.1 Modello Order
 Concettualmente contiene:
 
@@ -292,7 +320,8 @@ avg_pnl_loss
 
 Queste metriche servono come primo strato di analisi indipendente rispetto agli snapshot PNG/CSV di RickyBot.
 
-7. Configurazione LOMS (env)
+Configurazione LOMS (env)
+
 La configurazione è gestita via settings (Pydantic) che leggono dalle variabili d’ambiente / .env.
 
 Campo chiave attuale:
@@ -312,7 +341,8 @@ Copia codice
 OMS_ENABLED=true
 Altri parametri (DB, auto-close, ecc.) possono essere gestiti direttamente nel codice/config del servizio (vedi services/cryptonakcore/app/config.py).
 
-8. Integrazione con RickyBot
+Integrazione con RickyBot
+
 Sul lato RickyBot (repo separata) esiste un piccolo client HTTP:
 
 python
@@ -368,7 +398,8 @@ GET /stats
 
 (e sui log di LOMS + RickyBot).
 
-9. Roadmap v1 (sintesi)
+Roadmap v1 (sintesi)
+
 Stato attuale (2025-11-27):
 
 ✅ Modelli Order / Position allineati (tp/sl, close_price, closed_at, pnl, auto_close_reason).
@@ -401,7 +432,8 @@ whitelist simboli.
 
 ⬜ Eventuale autenticazione sull’API (token per evitare che “chiunque” chiami /signals/bounce).
 
-10. Note finali
+Note finali
+
 CryptoNakCore LOMS è pensato come “cuore logico” che un domani può gestire:
 
 più strategie,
@@ -425,3 +457,16 @@ e poi decidi se la prossima cosa da fare è:
 migliorare i controlli di rischio,
 
 o iniziare a preparare il broker reale per la fase “semi-live 100€”. 💡
+
+---
+
+## 10. Comandi rapidi di controllo (dev locale)
+
+Con ambiente attivo (venv) e server LOMS su `http://127.0.0.1:8000`, puoi fare tre check veloci.
+
+### 1) Health check API
+
+Verifica che il servizio risponda e che `/health` sia `status: "ok"`:
+
+```bash
+python tools/check_health.py

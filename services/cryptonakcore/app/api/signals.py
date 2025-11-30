@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -11,8 +12,8 @@ from app.core.config import settings
 from app.services.oms import _normalize_side, check_risk_limits
 
 
-
 router = APIRouter()
+logger = logging.getLogger("signals")
 
 # Default per TP/SL e quantità (paper)
 DEFAULT_TP_PCT = 4.5
@@ -38,6 +39,7 @@ class BounceSignal(BaseModel):
 
 # --------- Dependency DB ---------
 
+
 def get_db():
     db = SessionLocal()
     try:
@@ -47,6 +49,7 @@ def get_db():
 
 
 # --------- Endpoint ---------
+
 
 @router.post("/bounce")
 async def receive_bounce_signal(
@@ -64,8 +67,26 @@ async def receive_bounce_signal(
     payload = signal.model_dump(mode="json")
     log_bounce_signal(payload)
 
+    logger.info(
+        {
+            "event": "bounce_received",
+            "symbol": signal.symbol,
+            "side": signal.side,
+            "exchange": signal.exchange,
+            "timeframe_min": signal.timeframe_min,
+            "strategy": signal.strategy,
+        }
+    )
+
     # 2) Se l'OMS è disabilitato, ci fermiamo qui
     if not settings.OMS_ENABLED:
+        logger.info(
+            {
+                "event": "bounce_ignored_oms_disabled",
+                "symbol": signal.symbol,
+                "side": signal.side,
+            }
+        )
         return {
             "received": True,
             "oms_enabled": False,
@@ -77,6 +98,14 @@ async def receive_bounce_signal(
     risk_ok, risk_reason = check_risk_limits(db, signal.symbol)
     if not risk_ok:
         # NON apriamo ordine/posizione, ma segnaliamo il blocco
+        logger.info(
+            {
+                "event": "bounce_risk_block",
+                "symbol": signal.symbol,
+                "side": signal.side,
+                "risk_reason": risk_reason,
+            }
+        )
         return {
             "received": True,
             "oms_enabled": True,
@@ -102,6 +131,13 @@ async def receive_bounce_signal(
         sl_price = entry_price * (1.0 + sl_pct / 100.0) if sl_pct is not None else None
     else:
         # per ora, se side non è valido, non apriamo nulla
+        logger.info(
+            {
+                "event": "bounce_invalid_side",
+                "symbol": signal.symbol,
+                "raw_side": signal.side,
+            }
+        )
         return {
             "received": True,
             "oms_enabled": True,
@@ -139,6 +175,18 @@ async def receive_bounce_signal(
     db.commit()
     db.refresh(db_position)
 
+    logger.info(
+        {
+            "event": "bounce_order_created",
+            "symbol": signal.symbol,
+            "side": side,
+            "order_id": db_order.id,
+            "position_id": db_position.id,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+        }
+    )
+
     return {
         "received": True,
         "oms_enabled": True,
@@ -148,5 +196,3 @@ async def receive_bounce_signal(
         "tp_price": tp_price,
         "sl_price": sl_price,
     }
-
-

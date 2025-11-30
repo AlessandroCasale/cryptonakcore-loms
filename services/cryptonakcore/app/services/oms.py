@@ -24,9 +24,10 @@ def _normalize_side(side: str) -> str:
         return "short"
     return s
 
+
 def check_risk_limits(db: Session, symbol: str) -> tuple[bool, str | None]:
     """
-    Controlla i limiti di rischio base (paper):
+    Controlla i limiti di rischio base (paper), letti da Settings/env:
 
     - MAX_OPEN_POSITIONS: massimo numero di posizioni aperte in totale
     - MAX_OPEN_POSITIONS_PER_SYMBOL: massimo numero di posizioni aperte per simbolo
@@ -55,6 +56,7 @@ def check_risk_limits(db: Session, symbol: str) -> tuple[bool, str | None]:
                 "symbol": symbol,
                 "total_open": total_open,
                 "limit": max_total,
+                "reason": reason,
             }
         )
         return False, reason
@@ -72,12 +74,14 @@ def check_risk_limits(db: Session, symbol: str) -> tuple[bool, str | None]:
                 "symbol": symbol,
                 "open_for_symbol": open_for_symbol,
                 "limit": max_per_symbol,
+                "reason": reason,
             }
         )
         return False, reason
 
     # Tutto ok, si può aprire
     return True, None
+
 
 def auto_close_positions(db: Session) -> None:
     """
@@ -135,7 +139,7 @@ def auto_close_positions(db: Session) -> None:
         pos.status = "closed"
         pos.closed_at = now
         pos.close_price = current_price
-        pos.auto_close_reason = reason  # <— nuova riga
+        pos.auto_close_reason = reason
 
         # Calcolo PnL
         entry = float(pos.entry_price)
@@ -147,7 +151,6 @@ def auto_close_positions(db: Session) -> None:
             pos.pnl = (entry - current_price) * qty
 
         db.commit()
-
 
         logger.info(
             {
