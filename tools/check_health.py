@@ -34,7 +34,7 @@ def main() -> None:
         print("===================================\n")
         print(f"[CONNECTION ERROR] {e.reason}")
         print("Assicurati che il server LOMS sia avviato, ad esempio:")
-        print("  uvicorn app.main:app --reload")
+        print("  uvicorn services.cryptonakcore.app.main:app --reload")
         return
 
     print("===================================")
@@ -47,21 +47,24 @@ def main() -> None:
         print("Body JSON       : <non valido / non parseable>")
         return
 
-    # Campo 'status' se presente
     status = data.get("status")
+    environment = data.get("environment")
+    broker_mode = data.get("broker_mode")
+    oms_enabled = data.get("oms_enabled")
+
     if status is not None:
         print(f"Service status  : {status}")
     else:
         print("Service status  : <campo 'status' non presente>")
 
-    # Campi opzionali: environment / broker_mode
-    env = data.get("environment")
-    broker_mode = data.get("broker_mode")
+    if environment is not None:
+        print(f"Environment     : {environment}")
 
-    if env is not None:
-        print(f"Environment     : {env}")
     if broker_mode is not None:
         print(f"Broker mode     : {broker_mode}")
+
+    if oms_enabled is not None:
+        print(f"OMS enabled     : {oms_enabled}")
 
     print(f"Raw JSON        : {data}")
 

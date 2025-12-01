@@ -163,7 +163,8 @@ Risposta estesa (versione attuale):
   "service": "CryptoNakCore LOMS",
   "status": "ok",
   "environment": "dev",
-  "broker_mode": "paper"
+  "broker_mode": "paper",
+  "oms_enabled": true
 }
 Usato da tools/check_health.py per:
 
@@ -171,7 +172,9 @@ vedere rapidamente se il servizio risponde,
 
 leggere environment (dev / paper / prod in futuro),
 
-leggere broker_mode (paper ora, in futuro anche live).
+leggere broker_mode (paper ora, in futuro anche live),
+
+leggere oms_enabled (kill-switch logico dell’OMS).
 
 3.2 /market
 ✅ Endpoint per esporre il prezzo simulato (o informazioni minime di mercato).
@@ -353,6 +356,8 @@ MAX_OPEN_POSITIONS_PER_SYMBOL
 
 MAX_SIZE_PER_POSITION_USDT
 
+JWT_SECRET (placeholder per futuri auth/JWT)
+
 5.2 Flag OMS_ENABLED
 ✅ OMS_ENABLED: bool in Settings:
 
@@ -369,7 +374,7 @@ ENVIRONMENT=dev
 
 BROKER_MODE=paper
 
-DATABASE_URL=sqlite:///./loms_dev.db (o loms.db semplice)
+DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db
 
 AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl (opzionale)
 
@@ -379,7 +384,7 @@ ENVIRONMENT=paper
 
 BROKER_MODE=paper
 
-DATABASE_URL=sqlite:///./loms_paper.db (o path assoluto sul server)
+DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db (o path assoluto sul server)
 
 AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl (opzionale)
 
@@ -469,7 +474,8 @@ chiama il risk engine,
 
 se risk_ok=false → blocca e risponde con risk_reason,
 
-se risk_ok=true → crea Order + Position e risponde con order_id, position_id, tp_price, sl_price.
+se risk_ok=true → crea Order + Position e risponde con
+order_id, position_id, tp_price, sl_price.
 
 6.2 Client HTTP in RickyBot
 ✅ Già implementato
@@ -535,6 +541,7 @@ LOMS_BASE_URL=http://127.0.0.1:8000 (per i test locali)
 Da rifinire (opzionale):
 
 ⬜ eventuale LOMS_TIMEOUT_SEC configurabile (ora timeout è hardcoded a 5s),
+
 ⬜ documentare in modo chiaro la distinzione dev/prod (es. LOMS_ENABLED=false su Hetzner, true in locale).
 
 6.5 Logging lato RickyBot
@@ -576,7 +583,8 @@ Caratteristiche:
 chiama GET /stats su BASE_URL (default http://127.0.0.1:8000);
 
 gestisce errori HTTP ([HTTP ERROR]) e di connessione ([CONNECTION ERROR])
-con messaggio chiaro e hint per avviare il server (uvicorn app.main:app --reload);
+con messaggio chiaro e hint per avviare il server
+(uvicorn services.cryptonakcore.app.main:app --reload);
 
 stampa in console uno snapshot ordinato:
 
@@ -625,6 +633,8 @@ Service status,
 Environment (es. dev),
 
 Broker mode (es. paper),
+
+OMS enabled,
 
 JSON completo della risposta.
 
@@ -681,13 +691,15 @@ Stato:
 
 ✅ bots/rickybot/clients/loms_client.py già operativo (con timeout fisso 5s).
 
-✅ Payload allineato allo schema BounceSignal (campi: symbol, side, price, timestamp, exchange, timeframe_min, strategy, tp_pct, sl_pct).
+✅ Payload allineato allo schema BounceSignal
+(campi: symbol, side, price, timestamp, exchange, timeframe_min, strategy, tp_pct, sl_pct).
 
 ✅ tools/test_notify_loms.py usa il client e stampa la risposta LOMS.
 
 Da rifinire (opzionale):
 
-⬜ aggiungere parametri CLI a tools/test_notify_loms.py (--symbol, --side, --price, --tp, --sl),
+⬜ aggiungere parametri CLI a tools/test_notify_loms.py
+(--symbol, --side, --price, --tp, --sl),
 
 ⬜ rendere configurabile LOMS_TIMEOUT_SEC.
 
@@ -714,9 +726,12 @@ logga loms_alert_sent.
 
 ✅ scanner.run_scanner_tick legge runtime.config e lo passa a run_scan_loop_once.
 
-✅ scan_service.scan_symbol chiama notify_bounce_alert (Telegram + LOMS) quando runtime_config non è None e c’è un alert Bounce Strict; altrimenti usa il fallback send_telegram.
+✅ scan_service.scan_symbol chiama notify_bounce_alert (Telegram + LOMS)
+quando runtime_config non è None e c’è un alert Bounce Strict;
+altrimenti usa il fallback send_telegram.
 
-✅ tools/test_notify_notifier_loms.py verifica questa catena end-to-end senza bisogno di alert reali.
+✅ tools/test_notify_notifier_loms.py verifica questa catena end-to-end
+senza bisogno di alert reali.
 
 Da fare (organizzazione dev/prod):
 
@@ -735,7 +750,7 @@ Avviato LOMS in locale con:
 
 bash
 Copia codice
-uvicorn app.main:app --reload
+uvicorn services.cryptonakcore.app.main:app --reload
 # OMS_ENABLED=true
 Lanciato RickyBot in locale con:
 

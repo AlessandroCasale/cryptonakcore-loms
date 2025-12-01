@@ -32,5 +32,18 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
 
+    # Alias "comodi" in lower-case, usati da /health e da eventuali altri punti
+    @property
+    def environment(self) -> str:
+        return self.ENVIRONMENT
+
+    @property
+    def broker_mode(self) -> str:
+        return self.BROKER_MODE
+
+    @property
+    def oms_enabled(self) -> bool:
+        return self.OMS_ENABLED
+
 
 settings = Settings()

@@ -1,7 +1,8 @@
 # CryptoNakCore LOMS – Pre-Live Checklist MASTER (100€ semi-live)
 
 Versione aggiornata – 2025-11-30  
-Basata su: `docs/PRE_LIVE_ROADMAP.md` + tag `loms-paper-baseline-2025-11-30`
+Basata su: `docs/PRE_LIVE_ROADMAP.md`  
+(Stato: risk base da env, `MAX_SIZE_PER_POSITION_USDT` integrato, health tool ok, `.env.sample` allineato, logging & retention mappati, checklist operative abbozzate)
 
 ---
 
@@ -15,15 +16,12 @@ rollback immediato.
 
 ## 1. Stato di partenza
 
-- [x] RickyBot Bounce EMA10 Strict stabile  
-      (tag: `rickybot-pre-oms-tuning2-2025-11-30`, Tuning2 EMA10-60 + micro-candle guard).
-- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm” (solo segnali).
-- [x] LOMS FastAPI attivo in modalità **paper** (ordini, posizioni, TP/SL, auto-close).
-- [x] LOMS baseline paper taggato: `loms-paper-baseline-2025-11-30`.
+- [x] RickyBot Bounce EMA10 Strict stabile (tag pre-OMS).
+- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm”.
+- [x] LOMS FastAPI attivo in modalità paper (ordini, posizioni, TP/SL, auto-close).
 - [x] Integrazione RickyBot → LOMS testata end-to-end (segnale reale → ordine/posizione paper).
 - [x] Endpoint `/stats` funzionante + `tools/print_stats.py`.
-- [x] Endpoint `/health` funzionante + `tools/check_health.py`
-      (mostra anche `environment` e `broker_mode`).
+- [x] Endpoint `/health` funzionante + `tools/check_health.py`.
 
 ---
 
@@ -31,17 +29,31 @@ rollback immediato.
 
 ### 2.1 Versioning & tag
 
-- [x] Tag LOMS paper baseline: `loms-paper-baseline-2025-11-30`.
+- [ ] Tag LOMS paper stabile (es. `loms-paper-stable-2025-11-30`).
 - [ ] Annotare nel README:
-  - [ ] tag RickyBot usato (es. `rickybot-pre-oms-tuning2-2025-11-30`),
-  - [ ] tag LOMS usato (`loms-paper-baseline-2025-11-30`),
+  - [ ] tag RickyBot usato,
+  - [ ] tag LOMS usato,
   - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
 
 ### 2.2 Config dev vs paper-server
 
-- [x] Definire due profili LOMS (solo paper, per ora a livello di documentazione):
-  - [x] `DEV` locale (SQLite + `OMS_ENABLED=true`, `ENVIRONMENT=dev`, `BROKER_MODE=paper`).
-  - [x] `PAPER-SERVER` (DB separato + `OMS_ENABLED=true`, `ENVIRONMENT=paper`, `BROKER_MODE=paper`).
+- [ ] Definire due profili LOMS (concetto spiegato nella Pre-Live Roadmap):
+
+  - [ ] **`DEV` locale** – tipicamente:
+        - `ENVIRONMENT=dev`
+        - `BROKER_MODE=paper`
+        - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`
+        - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`
+        - `OMS_ENABLED=true`
+
+  - [ ] **`PAPER-SERVER` (Hetzner o altro)** – tipicamente:
+        - `ENVIRONMENT=paper`
+        - `BROKER_MODE=paper`
+        - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db`
+          (o path assoluto sul server)
+        - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`
+        - `OMS_ENABLED=true`
+
 - [x] Allineare `.env.sample` con `Settings` (✅ 2025-11-30):
   - [x] `ENVIRONMENT`
   - [x] `DATABASE_URL`
@@ -50,18 +62,45 @@ rollback immediato.
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
+
 - [x] Documentare Quickstart dev nel README (uvicorn + venv).
-- [x] Documentare i profili `DEV` vs `PAPER-SERVER` nel README
-      (sezione “Profili ambiente: DEV vs PAPER-SERVER”).
 
 ### 2.3 Logging & retention
 
-- [ ] Mappare dove finiscono:
-  - [ ] log applicativi (stdout / file, a seconda del run),
-  - [ ] audit JSONL (es. `services/cryptonakcore/data/bounce_signals*.jsonl`),
-  - [ ] DB SQLite (es. `loms_dev.db`, `loms_paper.db`).
-- [ ] Definire retention minima (es. ≥ 30 giorni).
-- [ ] Pensare a una rotazione semplice dei log (anche manuale).
+- [x] Mappare dove finiscono:
+  - [x] **log applicativi**
+        - In DEV: output console di `uvicorn` (shell / terminale VS Code).
+        - In futuro su server: stesso output, da leggere via `tmux`, `journalctl`
+          o con redirect su file (es. `services/cryptonakcore/logs/loms_paper_app.log`).
+  - [x] **audit JSONL**
+        - Path controllato da `AUDIT_LOG_PATH` in `.env`.
+        - Convenzione:
+          - DEV → `services/cryptonakcore/data/bounce_signals_dev.jsonl`
+          - PAPER-SERVER → `services/cryptonakcore/data/bounce_signals_paper.jsonl`
+  - [x] **DB SQLite**
+        - Path controllato da `DATABASE_URL` in `.env`.
+        - Convenzione:
+          - DEV → `sqlite:///./services/cryptonakcore/data/loms_dev.db`
+          - PAPER-SERVER → `sqlite:///./services/cryptonakcore/data/loms_paper.db`
+
+- [x] Definire retention minima (es. ≥ 30 giorni).
+  - Idea operativa:
+    - tenere sempre almeno ~30 giorni di storico “attivo” tra:
+      - DB corrente,
+      - audit JSONL corrente,
+      - qualche backup datato in `backups/`.
+
+- [x] Pensare a una rotazione semplice dei log (anche manuale).
+  - In DEV:
+    - fermare `uvicorn`,
+    - creare (se non esiste) `backups/`,
+    - spostare DB + JSONL con data nel nome  
+      (es. `backups/2025-12-01_loms_dev.db`,
+      `backups/2025-12-01_bounce_signals_dev.jsonl`),
+    - riavviare `uvicorn` → LOMS ricrea DB/audit “puliti”.
+  - In PAPER-SERVER (futuro):
+    - stessa logica via SSH (stop servizio → move file → restart),
+    - opzionale: comprimere i backup vecchi e tenere sul server solo gli ultimi N giorni.
 
 ---
 
@@ -73,15 +112,14 @@ rollback immediato.
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
+
 - [x] `check_risk_limits`:
-  - [x] usa `MAX_OPEN_POSITIONS` (limite totale posizioni aperte),
-  - [x] usa `MAX_OPEN_POSITIONS_PER_SYMBOL` (limite per simbolo),
+  - [x] usa `MAX_OPEN_POSITIONS`,
+  - [x] usa `MAX_OPEN_POSITIONS_PER_SYMBOL`,
   - [x] integra `MAX_SIZE_PER_POSITION_USDT` come limite sulla size notional
         (`entry_price * qty`), con log `risk_block` scope `"size"`,
   - [x] logga `risk_block` con motivo,
   - [x] accetta `None` come “nessun limite” (se in futuro lo vorrai usare così).
-- [x] Test manuale del limite size notional con `tools/test_bounce_size_limit.py`
-      (caso OK + caso blocco `max_size_per_position_exceeded`).
 
 ### 3.2 Risk RickyBot (futuro)
 
@@ -99,8 +137,7 @@ rollback immediato.
   - [ ] set `OMS_ENABLED=false` in env,
   - [ ] restart LOMS,
   - [ ] stop runner RickyBot se necessario.
-- [ ] Nota esplicita in README: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange
-      (anche dopo l’introduzione del broker reale).
+- [ ] Nota esplicita in README: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange.
 
 ---
 
@@ -119,14 +156,55 @@ rollback immediato.
 
 ### 4.2 Checklist operativa
 
-- [ ] Scrivere mini checklist “pre-apertura” (server + LOMS + RickyBot + log), ad es.:
+#### 4.2.1 Pre-apertura (giorno di trading)
 
-  - server up (ping + SSH),
-  - LOMS `/health` ok (env + broker_mode attesi),
-  - `print_stats.py` con `Open positions : 0`,
-  - runner RickyBot in esecuzione su Hetzner con heartbeat regolare.
+- [ ] **Server raggiungibile**
+  - [ ] PC / server (es. Hetzner) raggiungibile via SSH / RDP.
+- [ ] **Servizio LOMS attivo**
+  - [ ] Verificare che il processo `uvicorn` sia in esecuzione  
+        (oppure avviarlo con `uvicorn services.cryptonakcore.app.main:app --reload` in DEV).
+- [ ] **Health OK**
+  - [ ] Eseguire `python tools/check_health.py`.
+  - [ ] Controllare che:
+    - [ ] `HTTP status code` sia `200`,
+    - [ ] `Service status` sia `ok`,
+    - [ ] `Environment` e `Broker mode` siano quelli attesi (`dev` / `paper`).
+- [ ] **Stats di partenza sensate**
+  - [ ] Eseguire `python tools/print_stats.py`.
+  - [ ] Verificare almeno:
+    - [ ] `open_positions = 0` (o comunque valore atteso),
+    - [ ] nessun numero “strano” (es. PnL enormi inspiegabili).
+- [ ] **Percorsi file OK**
+  - [ ] Esiste il file DB (`loms.db`, `loms_dev.db` o `loms_paper.db` a seconda del profilo).
+  - [ ] La cartella `services/cryptonakcore/data/` esiste.
+  - [ ] Il path configurato in `AUDIT_LOG_PATH` è raggiungibile/scrivibile
+        (in caso di primo avvio può non esistere ancora il file, va bene così).
+- [ ] **(Solo quando LOMS è collegato a RickyBot)**
+  - [ ] Verificare che il runner RickyBot sia in esecuzione (sessione tmux attiva).
+  - [ ] Controllare dagli ultimi log che non ci siano errori gravi al bootstrap.
 
-- [ ] Scrivere mini checklist “post-giornata” (export `/stats`, log errori, eventuale backup DB/JSONL).
+#### 4.2.2 Post-giornata
+
+- [ ] **Snapshot finale stats**
+  - [ ] Eseguire `python tools/print_stats.py`.
+  - [ ] Salvare l’output (copia/incolla in un file `.md` / `.txt` datato
+        o screenshot) per storico giornaliero.
+- [ ] **Controllo posizioni aperte**
+  - [ ] Verificare da `print_stats.py` che `open_positions = 0`.
+  - [ ] In caso di dubbi, controllare anche da `/docs` → `GET /positions`.
+- [ ] **Verifica errori**
+  - [ ] Dare un’occhiata agli ultimi log applicativi LOMS
+        (traceback / errori evidenti).
+  - [ ] Se usato, fare un `tail` dell’audit JSONL per controllare che gli ultimi
+        eventi siano sensati.
+- [ ] **Backup leggero (quando serve)**
+  - [ ] Copiare il file DB (`loms_*.db`) in una cartella di backup con data
+        (es. `backups/2025-12-01_loms_dev.db`).
+  - [ ] Facoltativo: copiare/comprimere anche il file di audit JSONL.
+- [ ] **Spegnimento ordinato (se richiesto)**
+  - [ ] Se non serve tenerlo acceso H24, fermare in modo pulito:
+    - [ ] processo `uvicorn` / servizio LOMS,
+    - [ ] eventuale runner RickyBot collegato (quando saremo in Shadow / semi-live).
 
 ---
 
@@ -195,12 +273,8 @@ rollback immediato.
 
 ## 8. Prossimi micro-step consigliati
 
-- [ ] Annotare esplicitamente in README i tag di riferimento:
-  - [ ] `rickybot-pre-oms-tuning2-2025-11-30`,
-  - [ ] `loms-paper-baseline-2025-11-30`,
-  - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
-- [x] Definire meglio profili `DEV` vs `PAPER-SERVER` e documentarli  
-      (✅ fatto 2025-11-30, vedi README sezione “Profili ambiente”).
-- [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine
+- [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
+- [ ] Definire meglio profili `DEV` vs `PAPER-SERVER`.
+- [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine  
       (✅ fatto 2025-11-30, vedi sezione 3.1).
 - [ ] Avviare una prima Shadow Mode locale di qualche giorno.

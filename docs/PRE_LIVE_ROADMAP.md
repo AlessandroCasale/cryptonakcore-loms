@@ -1,191 +1,333 @@
-# CryptoNakCore LOMS – Pre-Live Checklist MASTER (100€ semi-live)
+# CryptoNakCore LOMS – Pre-Live Roadmap (100€ semi-live)
 
-Versione iniziale – 2025-11-30  
-Basata su: `docs/PRE_LIVE_ROADMAP.md`
+Versione aggiornata – 2025-11-30  
+(Stato: risk base da env, `MAX_SIZE_PER_POSITION_USDT` integrato, health tool e `.env.sample` allineati, logging & retention mappati, mini checklist operative abbozzate)
 
----
-
-## 0. Obiettivo
-
-Preparare la coppia **RickyBot + CryptoNakCore LOMS** a un test
+Obiettivo: preparare la coppia **RickyBot + CryptoNakCore LOMS** a un test
 **semi-live con 100€** su Bitget, con rischio ultra-limitato e possibilità di
 rollback immediato.
 
----
-
-## 1. Stato di partenza
-
-- [x] RickyBot Bounce EMA10 Strict stabile (tag pre-OMS).
-- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm”.
-- [x] LOMS FastAPI attivo in modalità paper (ordini, posizioni, TP/SL, auto-close).
-- [x] Integrazione RickyBot → LOMS testata end-to-end (segnale reale → ordine/posizione paper).
-- [x] Endpoint `/stats` funzionante + `tools/print_stats.py`.
-- [x] Endpoint `/health` funzionante + `tools/check_health.py`.
+Questa roadmap NON abilita ancora il live: definisce cosa deve essere pronto
+prima di anche solo pensarci.
 
 ---
 
-## 2. Fase 1 – Hardening ambiente PAPER
+## A. Stato di partenza (oggi)
 
-### 2.1 Versioning & tag
+- **RickyBot**
+  - Bounce EMA10 Strict stabile, taggato  
+    `rickybot-pre-oms-stable-2025-11-26` (poi Tuning2).
+  - Runner in produzione su Hetzner in modalità “stable farm” (solo segnali).
+  - Dev locale separato da prod (env diversi).
 
-- [ ] Tag LOMS paper stabile (es. `loms-paper-stable-2025-11-27`).
+- **LOMS**
+  - Servizio FastAPI `cryptonakcore-loms` con:
+    - OMS paper completo (ordini, posizioni, TP/SL, auto_close).
+    - Integrazione end-to-end con RickyBot dev via `notify_bounce_alert`.
+    - `/stats` + `tools/print_stats.py` funzionanti.
+    - `/health` + `tools/check_health.py` funzionanti (inclusi `environment` e `broker_mode`).
+  - Tutto gira **solo in modalità paper**.
+
+---
+
+## B. Fase 1 – Hardening ambiente PAPER
+
+> Obiettivo: avere uno “stack paper” talmente solido da poterlo clonare per il
+> semi-live, senza sorprese.
+
+### B1. Versioning & tag
+
+- [ ] Taggare una versione paper stabile di LOMS (es. `loms-paper-stable-2025-11-30`).
 - [ ] Annotare nel README:
   - [ ] tag RickyBot usato,
   - [ ] tag LOMS usato,
-  - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
+  - [ ] schema delle versioni (es. `v0.x-paper`, `v1.x-live`).
 
-### 2.2 Config dev vs paper-server
+---
 
-- [ ] Definire due profili LOMS:
-  - [ ] `DEV` locale (SQLite + `OMS_ENABLED=true`).
-  - [ ] `PAPER-SERVER` (DB separato + `OMS_ENABLED=true`).
+### B2. Config dev vs prod (solo paper)
 
-- [x] Allineare `.env.sample` con `Settings` (✅ 2025-11-30):
-  - [x] `ENVIRONMENT`
+- [ ] Definire chiaramente due profili per LOMS (concetto già descritto nel README):
+
+  - **`DEV` (locale)**  
+    - `ENVIRONMENT=dev`  
+    - `BROKER_MODE=paper`  
+    - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`  
+    - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`  
+    - `OMS_ENABLED=true`
+
+  - **`PAPER-SERVER` (Hetzner o altro)**  
+    - `ENVIRONMENT=paper`  
+    - `BROKER_MODE=paper`  
+    - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db`
+      (o path assoluto sul server)  
+    - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`  
+    - `OMS_ENABLED=true`
+
+- [x] Aggiungere a `services/cryptonakcore/.env.sample` i campi minimi  
+      *(✅ fatto 2025-11-30)*:
+  - [x] `ENVIRONMENT=dev|paper|live`
   - [x] `DATABASE_URL`
   - [x] `AUDIT_LOG_PATH`
   - [x] `OMS_ENABLED`
-  - [x] `MAX_OPEN_POSITIONS`
-  - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
-  - [x] `MAX_SIZE_PER_POSITION_USDT`
+  - [x] limiti rischio base (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`,
+        `MAX_SIZE_PER_POSITION_USDT`)
 
-- [x] Documentare Quickstart dev nel README (uvicorn + venv).
-
-### 2.3 Logging & retention
-
-- [ ] Mappare dove finiscono:
-  - [ ] log applicativi,
-  - [ ] audit JSONL,
-  - [ ] DB SQLite.
-- [ ] Definire retention minima (es. ≥ 30 giorni).
-- [ ] Pensare a una rotazione semplice dei log (anche manuale).
+- [x] Documentare nel README come lanciare in dev (uvicorn + venv, sezione Quickstart).  
+      *(profilo server potrà essere dettagliato più avanti)*
 
 ---
 
-## 3. Fase 2 – Risk lato LOMS & RickyBot
+### B3. Logging & retention
 
-### 3.1 Risk LOMS
+> Adesso c’è una prima policy chiara su **dove** finiscono i dati e
+> **come** tenerli “in ordine”.
 
-- [x] Parametri da env letti in `Settings`:
+- [x] Verificare dove finiscono:
+
+  - [x] **Log applicativi**
+    - In DEV: output console di `uvicorn` (shell / terminale VS Code).
+    - In futuro su server: stesso output, da vedere via `tmux`, `journalctl`
+      o redirect su file (es. `services/cryptonakcore/logs/loms_paper_app.log`).
+
+  - [x] **Log audit JSONL**
+    - Path controllato da `AUDIT_LOG_PATH` in `.env`.
+    - Convenzione:
+      - DEV → `services/cryptonakcore/data/bounce_signals_dev.jsonl`
+      - PAPER-SERVER → `services/cryptonakcore/data/bounce_signals_paper.jsonl`
+
+  - [x] **DB SQLite**
+    - Path controllato da `DATABASE_URL` in `.env`.
+    - Convenzione:
+      - DEV → `sqlite:///./services/cryptonakcore/data/loms_dev.db`
+      - PAPER-SERVER → `sqlite:///./services/cryptonakcore/data/loms_paper.db`
+
+- [x] Aggiungere note di retention minima (es. “tenere almeno 30 giorni”).
+
+  - Idea: mantenere **almeno 30 giorni** di storico ragionevole tra:
+    - DB corrente,
+    - audit JSONL corrente,
+    - qualche backup datato in `backups/`.
+
+- [x] Valutare una rotazione semplice dei log (anche solo manuale).
+
+  - In DEV:
+    - fermare `uvicorn`,
+    - creare (se non esiste) una cartella `backups/`,
+    - spostare DB e JSONL con data nel nome, es.  
+      `backups/2025-12-01_loms_dev.db`,  
+      `backups/2025-12-01_bounce_signals_dev.jsonl`,
+    - riavviare `uvicorn` → LOMS ricrea DB/audit “puliti”.
+  - In PAPER-SERVER (futuro):
+    - stessa logica via SSH (stop servizio → move file → restart),
+    - facoltativo: comprimere i backup più vecchi e tenere sul server
+      solo gli ultimi N giorni.
+
+---
+
+## C. Fase 2 – Risk & parametrizzazione per il semi-live
+
+> Obiettivo: avere un **layer di safety** anche se qualcosa va storto lato
+> strategia o exchange.
+
+### C1. Parametri risk lato LOMS
+
+- [x] Leggere da env:
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
+- [x] Aggiornare il risk engine per usare questi parametri  
+      *(✅ `check_risk_limits` usa tutti e tre e accetta anche `None` = nessun limite)*.
+- [x] Loggare chiaramente i blocchi (`risk_block` con motivi, scope `"total"`, `"symbol"`, `"size"`).
 
-- [x] `check_risk_limits`:
-  - [x] usa `MAX_OPEN_POSITIONS`,
-  - [x] usa `MAX_OPEN_POSITIONS_PER_SYMBOL`,
-  - [x] integra `MAX_SIZE_PER_POSITION_USDT` come limite sulla size notional
-        (`entry_price * qty`), con log `risk_block` scope `"size"`,
-  - [x] logga `risk_block` con motivo,
-  - [x] accetta `None` come “nessun limite” (se in futuro lo vorrai usare così).
+### C2. Parametri risk lato RickyBot
 
-### 3.2 Risk RickyBot (futuro)
+- [ ] Definire in `.env` RickyBot (solo dev/live):
+  - [ ] `RISK_MAX_ALERTS_PER_DAY`
+  - [ ] `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY`
+- [ ] (Opzionale) Aggiungere un contatore nel runner / audit per questi limiti.
 
-- [ ] Aggiungere in `.env` RickyBot (dev/live):
-  - [ ] `RISK_MAX_ALERTS_PER_DAY`,
-  - [ ] `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY`.
-- [ ] Eventuale contatore nel runner / audit per questi limiti.
+### C3. Controlli “kill switch”
 
-### 3.3 Kill switch & modalità broker
-
-- [x] Flag LOMS:
-  - [x] `BROKER_MODE=paper|live` (per ora sempre `paper`, esposto in `/health`
-        e visualizzabile con `python tools/check_health.py`).
-- [ ] Procedura emergenza:
-  - [ ] set `OMS_ENABLED=false` in env,
-  - [ ] restart LOMS,
+- [x] Introdurre un flag LOMS:
+  - [x] `BROKER_MODE=paper|live`  
+        (per ora resta sempre `paper`; flag letto da `Settings`
+        ed esposto in `/health` → visibile con `tools/check_health.py`).
+- [ ] Definire una regola chiara: se `BROKER_MODE=paper` → **nessun** ordine verso exchange
+      reale anche in futuro (anche quando esisterà un adapter reale).
+- [ ] Documentare una procedura di emergenza:
+  - [ ] edit `.env` → `OMS_ENABLED=false`,
+  - [ ] restart servizio LOMS,
   - [ ] stop runner RickyBot se necessario.
-- [ ] Nota esplicita in README: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange.
 
 ---
 
-## 4. Fase 3 – Monitoraggio operativo
+## D. Fase 3 – Monitoraggio operativo
 
-### 4.1 Strumenti minimi (già pronti)
+> Obiettivo: poter vedere rapidamente se “tutto va bene” senza aprire mille file.
 
-- [x] Health:
-  - [x] `python tools/check_health.py`
-- [x] Stats:
+### D1. Strumenti minimi
+
+- [x] Comando standard per stats LOMS:
   - [x] `python tools/print_stats.py`
-- [x] README / roadmap con i 3 comandi base:
-  - [x] avvio uvicorn,
+- [x] Script per health:
+  - [x] `python tools/check_health.py` → chiama `/health` e stampa stato
+        (inclusi `environment` e `broker_mode`).
+- [x] Mini guida nel README / checklist con 3 comandi “di controllo”:
+  - [x] avvio `uvicorn` in dev,
   - [x] check health,
   - [x] check stats.
 
-### 4.2 Checklist operativa
+#### D1.1 Comandi rapidi consigliati (dev locale)
 
-- [ ] Scrivere mini checklist “pre-apertura” (server + LOMS + RickyBot + log).
-- [ ] Scrivere mini checklist “post-giornata” (export `/stats`, log errori, eventuale backup DB/JSONL).
+```bash
+# 1) Attivare l'ambiente
+.\.venv\Scripts\Activate.ps1   # su Windows (PowerShell)
+# oppure
+source .venv/bin/activate      # su bash
 
----
+# 2) Avviare il servizio LOMS (dev locale)
+uvicorn services.cryptonakcore.app.main:app --reload
 
-## 5. Fase 4 – Shadow Mode
+# 3) Controllare che il servizio risponda (health)
+python tools/check_health.py
 
-### 5.1 Setup shadow
+# 4) Controllare le statistiche PnL / TP-SL
+python tools/print_stats.py
+D2. Checklist giornaliera (pre-apertura / post-giornata)
+Questa parte è descritta più in dettaglio nella Pre-Live Checklist MASTER,
+qui resta solo la “foto mentale”.
 
-- [ ] Avviare LOMS vicino all’ambiente reale (locale o server).
-- [ ] Configurare RickyBot dev con:
-  - [ ] parametri vicini ai futuri semi-live,
-  - [ ] `LOMS_ENABLED=true`,
-  - [ ] `BROKER_MODE=paper`.
-- [ ] Lasciare girare per N giorni (es. 5–10).
+Pre-apertura
 
-### 5.2 Analisi Shadow
+server/PC raggiungibile,
 
-- [ ] Raccogliere `/stats` (es. con `print_stats.py`) a fine giornata.
-- [ ] Valutare:
-  - [ ] winrate,
-  - [ ] max drawdown,
-  - [ ] operazioni/giorno,
-  - [ ] distribuzione TP vs SL.
-- [ ] Definire soglia “ok per semi-live” (es. winrate minimo, drawdown massimo accettabile).
+processo uvicorn attivo (o avviato),
 
----
+python tools/check_health.py → status=ok, environment e broker_mode attesi,
 
-## 6. Fase 5 – Preparazione account 100€ semi-live
+python tools/print_stats.py → numeri coerenti (es. open_positions=0),
 
-### 6.1 Account & fondi
+path DB e audit esistenti/scrivibili.
 
-- [ ] Sub-account dedicato su Bitget (o exchange target).
-- [ ] Depositare solo la cifra test (es. 100€ in USDT).
-- [ ] Verificare che non ci siano posizioni aperte/asset strani sul sub-account.
+Post-giornata
 
-### 6.2 API & permessi
+python tools/print_stats.py → snapshot finale salvato (file .md/.txt o screenshot),
 
-- [ ] Creare API key dedicate al sub-account:
-  - [ ] permessi solo futures/perp necessari,
-  - [ ] nessun permesso withdraw.
-- [ ] Salvare le chiavi in env del modulo broker (quando esisterà).
-- [ ] Test “read-only” (es. get balance) quando il broker reale sarà integrato.
+verifica che non ci siano posizioni aperte,
 
----
+controllo rapido errori nei log,
 
-## 7. Fase 6 – Go / No-Go + rollback
+eventuale copia DB/audit in backups/ se serve “tagliare” la storia.
 
-### 7.1 Criteri Go/No-Go
+E. Fase 4 – Shadow Mode (raccomandata prima del 100€)
+Shadow mode = stesso flusso di segnali, ma solo paper, mentre eventualmente
+fai ancora trading manuale, per confrontare.
 
-- [ ] Almeno N (es. 200–300) operazioni paper in LOMS.
-- [ ] Nessun bug critico aperto in:
-  - [ ] chiusura posizioni,
-  - [ ] calcolo PnL,
-  - [ ] `/stats`.
-- [ ] Shadow mode con risultati coerenti con snapshot / analisi offline.
+E1. Setup shadow
+Avviare LOMS su una macchina “vicina” all’ambiente reale (es. locale o server).
 
-### 7.2 Piano di rollback
+Configurare RickyBot dev con:
 
-- [ ] Sezione nel README / runbook con:
-  - [ ] “come spegnere tutto in 60 secondi”,
-  - [ ] come verificare che non restino posizioni aperte.
-- [ ] Procedura post-incident:
-  - [ ] esportare DB/JSONL,
-  - [ ] scrivere mini post-mortem tecnico (anche solo per te e Ricky).
+parametri il più possibile vicini a quelli che userai nel semi-live,
 
----
+LOMS_ENABLED=true,
 
-## 8. Prossimi micro-step consigliati
+BROKER_MODE=paper.
 
-- [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
-- [ ] Definire meglio profili `DEV` vs `PAPER-SERVER`.
-- [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine
-      (✅ fatto 2025-11-30, vedi sezione 3.1).
-- [ ] Avviare una prima Shadow Mode locale di qualche giorno.
+Lasciare girare per almeno N giorni (es. 5–10).
+
+E2. Analisi risultati shadow
+Raccogliere /stats a fine giornata (via tools/print_stats.py).
+
+Controllare:
+
+winrate,
+
+max drawdown simulato,
+
+numero medio di operazioni/giorno,
+
+distribuzione TP vs SL.
+
+Definire una soglia di “OK per semi-live”, per esempio:
+
+winrate ≥ X%,
+
+drawdown massimo accettabile,
+
+nessun bug critico emerso nei log.
+
+F. Fase 5 – Preparazione account 100€ semi-live
+Qui NON attiviamo ancora ordini automatici reali, ma prepariamo il terreno.
+
+F1. Account & fondi
+Creare (o usare) un sub-account dedicato sull’exchange target.
+
+Depositare solo la cifra del test (es. 100€ in USDT).
+
+Verificare che non ci siano:
+
+posizioni aperte,
+
+altri asset “strani” sul sub-account.
+
+F2. API & permessi
+Creare API key dedicate al sub-account:
+
+permessi SOLO per futures/perp necessari,
+
+nessun permesso di withdraw.
+
+Salvare le chiavi in .env del futuro modulo broker (non ancora usato).
+
+Quando il broker reale sarà integrato:
+
+prima fare solo test read-only (es. get balance).
+
+G. Fase 6 – Go / No-Go per il live automatico
+Blocco più “lontano”, ma conviene fissare i paletti già adesso.
+
+G1. Criteri minimi per pensare al semi-live
+Almeno N (es. 200–300) operazioni paper registrate in LOMS.
+
+Nessun bug critico aperto in:
+
+chiusura posizioni,
+
+calcolo PnL,
+
+/stats.
+
+Shadow mode con risultati coerenti con:
+
+snapshot PNG/CSV di RickyBot,
+
+analisi offline.
+
+G2. Piano di rollback
+Una pagina nel README / runbook con:
+
+“come spegnere tutto in 60 secondi”,
+
+come verificare che nessuna posizione sia rimasta aperta.
+
+Dopo un eventuale incidente:
+
+esportare DB/JSONL,
+
+scrivere un breve post-mortem tecnico (anche solo per te e Ricky).
+
+H. Prossimi micro-step consigliati
+Ordine suggerito, tutti ancora in modalità paper:
+
+Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase B1).
+
+Rifinire i profili DEV vs PAPER-SERVER (anche solo a livello di esempi
+reali di .env per PC locale vs server).
+
+Pensare ai primi parametri risk lato RickyBot (C2) – anche se poi li
+userai più avanti.
+
+Quando ti va: avviare una prima Shadow Mode locale di qualche giorno
+(LOMS in locale, RickyBot dev → LOMS, BROKER_MODE=paper fisso).
