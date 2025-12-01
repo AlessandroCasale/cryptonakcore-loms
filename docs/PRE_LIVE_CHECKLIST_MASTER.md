@@ -1,7 +1,7 @@
 # CryptoNakCore LOMS – Pre-Live Checklist MASTER (100€ semi-live)
 
-Versione iniziale – 2025-11-30  
-Basata su: `docs/PRE_LIVE_ROADMAP.md`
+Versione aggiornata – 2025-11-30  
+Basata su: `docs/PRE_LIVE_ROADMAP.md` + tag `loms-paper-baseline-2025-11-30`
 
 ---
 
@@ -15,12 +15,15 @@ rollback immediato.
 
 ## 1. Stato di partenza
 
-- [x] RickyBot Bounce EMA10 Strict stabile (tag pre-OMS).
-- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm”.
-- [x] LOMS FastAPI attivo in modalità paper (ordini, posizioni, TP/SL, auto-close).
+- [x] RickyBot Bounce EMA10 Strict stabile  
+      (tag: `rickybot-pre-oms-tuning2-2025-11-30`, Tuning2 EMA10-60 + micro-candle guard).
+- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm” (solo segnali).
+- [x] LOMS FastAPI attivo in modalità **paper** (ordini, posizioni, TP/SL, auto-close).
+- [x] LOMS baseline paper taggato: `loms-paper-baseline-2025-11-30`.
 - [x] Integrazione RickyBot → LOMS testata end-to-end (segnale reale → ordine/posizione paper).
 - [x] Endpoint `/stats` funzionante + `tools/print_stats.py`.
-- [x] Endpoint `/health` funzionante + `tools/check_health.py`.
+- [x] Endpoint `/health` funzionante + `tools/check_health.py`
+      (mostra anche `environment` e `broker_mode`).
 
 ---
 
@@ -28,18 +31,17 @@ rollback immediato.
 
 ### 2.1 Versioning & tag
 
-- [ ] Tag LOMS paper stabile (es. `loms-paper-stable-2025-11-27`).
+- [x] Tag LOMS paper baseline: `loms-paper-baseline-2025-11-30`.
 - [ ] Annotare nel README:
-  - [ ] tag RickyBot usato,
-  - [ ] tag LOMS usato,
+  - [ ] tag RickyBot usato (es. `rickybot-pre-oms-tuning2-2025-11-30`),
+  - [ ] tag LOMS usato (`loms-paper-baseline-2025-11-30`),
   - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
 
 ### 2.2 Config dev vs paper-server
 
-- [ ] Definire due profili LOMS:
-  - [ ] `DEV` locale (SQLite + `OMS_ENABLED=true`).
-  - [ ] `PAPER-SERVER` (DB separato + `OMS_ENABLED=true`).
-
+- [x] Definire due profili LOMS (solo paper, per ora a livello di documentazione):
+  - [x] `DEV` locale (SQLite + `OMS_ENABLED=true`, `ENVIRONMENT=dev`, `BROKER_MODE=paper`).
+  - [x] `PAPER-SERVER` (DB separato + `OMS_ENABLED=true`, `ENVIRONMENT=paper`, `BROKER_MODE=paper`).
 - [x] Allineare `.env.sample` con `Settings` (✅ 2025-11-30):
   - [x] `ENVIRONMENT`
   - [x] `DATABASE_URL`
@@ -48,15 +50,16 @@ rollback immediato.
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
-
 - [x] Documentare Quickstart dev nel README (uvicorn + venv).
+- [x] Documentare i profili `DEV` vs `PAPER-SERVER` nel README
+      (sezione “Profili ambiente: DEV vs PAPER-SERVER”).
 
 ### 2.3 Logging & retention
 
 - [ ] Mappare dove finiscono:
-  - [ ] log applicativi,
-  - [ ] audit JSONL,
-  - [ ] DB SQLite.
+  - [ ] log applicativi (stdout / file, a seconda del run),
+  - [ ] audit JSONL (es. `services/cryptonakcore/data/bounce_signals*.jsonl`),
+  - [ ] DB SQLite (es. `loms_dev.db`, `loms_paper.db`).
 - [ ] Definire retention minima (es. ≥ 30 giorni).
 - [ ] Pensare a una rotazione semplice dei log (anche manuale).
 
@@ -70,14 +73,15 @@ rollback immediato.
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
-
 - [x] `check_risk_limits`:
-  - [x] usa `MAX_OPEN_POSITIONS`,
-  - [x] usa `MAX_OPEN_POSITIONS_PER_SYMBOL`,
+  - [x] usa `MAX_OPEN_POSITIONS` (limite totale posizioni aperte),
+  - [x] usa `MAX_OPEN_POSITIONS_PER_SYMBOL` (limite per simbolo),
   - [x] integra `MAX_SIZE_PER_POSITION_USDT` come limite sulla size notional
         (`entry_price * qty`), con log `risk_block` scope `"size"`,
   - [x] logga `risk_block` con motivo,
   - [x] accetta `None` come “nessun limite” (se in futuro lo vorrai usare così).
+- [x] Test manuale del limite size notional con `tools/test_bounce_size_limit.py`
+      (caso OK + caso blocco `max_size_per_position_exceeded`).
 
 ### 3.2 Risk RickyBot (futuro)
 
@@ -95,7 +99,8 @@ rollback immediato.
   - [ ] set `OMS_ENABLED=false` in env,
   - [ ] restart LOMS,
   - [ ] stop runner RickyBot se necessario.
-- [ ] Nota esplicita in README: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange.
+- [ ] Nota esplicita in README: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange
+      (anche dopo l’introduzione del broker reale).
 
 ---
 
@@ -114,7 +119,13 @@ rollback immediato.
 
 ### 4.2 Checklist operativa
 
-- [ ] Scrivere mini checklist “pre-apertura” (server + LOMS + RickyBot + log).
+- [ ] Scrivere mini checklist “pre-apertura” (server + LOMS + RickyBot + log), ad es.:
+
+  - server up (ping + SSH),
+  - LOMS `/health` ok (env + broker_mode attesi),
+  - `print_stats.py` con `Open positions : 0`,
+  - runner RickyBot in esecuzione su Hetzner con heartbeat regolare.
+
 - [ ] Scrivere mini checklist “post-giornata” (export `/stats`, log errori, eventuale backup DB/JSONL).
 
 ---
@@ -184,8 +195,12 @@ rollback immediato.
 
 ## 8. Prossimi micro-step consigliati
 
-- [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
-- [ ] Definire meglio profili `DEV` vs `PAPER-SERVER`.
+- [ ] Annotare esplicitamente in README i tag di riferimento:
+  - [ ] `rickybot-pre-oms-tuning2-2025-11-30`,
+  - [ ] `loms-paper-baseline-2025-11-30`,
+  - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
+- [x] Definire meglio profili `DEV` vs `PAPER-SERVER` e documentarli  
+      (✅ fatto 2025-11-30, vedi README sezione “Profili ambiente”).
 - [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine
       (✅ fatto 2025-11-30, vedi sezione 3.1).
 - [ ] Avviare una prima Shadow Mode locale di qualche giorno.

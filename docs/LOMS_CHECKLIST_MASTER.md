@@ -1,7 +1,8 @@
 # CryptoNakCore LOMS – Jira Checklist MASTER
 
-Versione aggiornata al 2025-11-27  
-(Stato: dopo integrazione `notify_bounce_alert` → LOMS + `MarketSimulator` v2 + **primo alert reale end-to-end**)
+Versione aggiornata al 2025-11-30  
+(Stato: `loms-paper-baseline-2025-11-30` con MarketSimulator v2, risk engine a 3 limiti,
+integrazione RickyBot → LOMS, tools di health/stats e profili DEV vs PAPER-SERVER documentati)
 
 Legenda stato:  
 ✅ completato  
@@ -80,8 +81,8 @@ Portare **CryptoNakCore LOMS** da semplice API di test a:
 
 logica TP/SL:
 
-- long: TP se `price >= tp`, SL se `price <= sl`
-- short: TP se `price <= tp`, SL se `price >= sl`
+- **long**: TP se `price >= tp`, SL se `price <= sl`
+- **short**: TP se `price <= tp`, SL se `price >= sl`
 
 chiusura posizione:
 
@@ -108,29 +109,43 @@ chiusura posizione:
 
 ### 2.4 Risk engine base
 
-✅ Completato (prima versione)
+✅ Completato (prima versione + limite di size notional)
 
-- Funzione `check_risk_limits(db, symbol)` in `app.services.oms`:
-  - legge i limiti da `settings` (env):
-    - `MAX_OPEN_POSITIONS_TOTAL`
-    - `MAX_OPEN_POSITIONS_PER_SYMBOL`
-  - conta le posizioni `open` totali e per singolo `symbol`,
-  - se il limite totale è superato → ritorna `risk_ok=False` con reason
-    `max_total_open_reached (total=..., limit=...)`,
-  - se il limite per simbolo è superato → ritorna `risk_ok=False` con reason
-    `max_symbol_open_reached (symbol=..., count=..., limit=...)`.
+Funzione `check_risk_limits(db, symbol)` in `app.services.oms`:
 
-- Logging strutturato:
-  - evento `risk_block` con:
-    - `scope` = `"total"` o `"symbol"`,
-    - `symbol`,
-    - `total_open` / `open_for_symbol`,
-    - `limit`.
+- legge i limiti da `settings` (env):
+  - `MAX_OPEN_POSITIONS` (limite totale posizioni aperte),
+  - `MAX_OPEN_POSITIONS_PER_SYMBOL` (limite per singolo `symbol`),
+  - `MAX_SIZE_PER_POSITION_USDT` (limite di **notional** per singola posizione:
+    `entry_price * qty`).
+
+- controlli:
+
+  - se il limite totale è superato → ritorna `risk_ok=False` con reason  
+    `max_total_open_reached (total=..., limit=...)`  
+    e log `risk_block` con `scope="total"`,
+
+  - se il limite per simbolo è superato → ritorna `risk_ok=False` con reason  
+    `max_symbol_open_reached (symbol=..., count=..., limit=...)`  
+    e log `risk_block` con `scope="symbol"`,
+
+  - se la notional della nuova posizione supera `MAX_SIZE_PER_POSITION_USDT` →  
+    `risk_ok=False` con reason  
+    `max_size_per_position_exceeded (notional=..., limit=...)`  
+    e log `risk_block` con `scope="size"`.
 
 - L’endpoint `/signals/bounce`:
-  - usa `check_risk_limits` prima di creare Order/Position,
+  - usa **sempre** `check_risk_limits` prima di creare Order/Position,
   - risponde sempre con `risk_ok` e `risk_reason` (quando bloccato),
   - in caso di blocco NON crea nessun ordine/posizione.
+
+✅ Tool di test dedicato:
+
+- `tools/test_bounce_size_limit.py`:
+  - primo segnale simbolo `SIZEOKUSDT` → passa (`risk_ok=True`),
+  - secondo segnale simbolo `SIZEBLOCKUSDT` → blocco per:
+    - prima variante: limite totale open,
+    - variante attuale: `max_size_per_position_exceeded`.
 
 ---
 
@@ -140,351 +155,447 @@ chiusura posizione:
 
 ✅ Endpoint base per health check del servizio.
 
----
+Risposta estesa (versione attuale):
 
-### 3.2 `/market`
+```json
+{
+  "ok": true,
+  "service": "CryptoNakCore LOMS",
+  "status": "ok",
+  "environment": "dev",
+  "broker_mode": "paper"
+}
+Usato da tools/check_health.py per:
 
+vedere rapidamente se il servizio risponde,
+
+leggere environment (dev / paper / prod in futuro),
+
+leggere broker_mode (paper ora, in futuro anche live).
+
+3.2 /market
 ✅ Endpoint per esporre il prezzo simulato (o informazioni minime di mercato).
 
----
+3.3 /orders
+✅ POST /orders
+Crea un Order e una Position paper con i parametri inviati (entry_price, TP/SL).
 
-### 3.3 `/orders`
-
-✅ `POST /orders`  
-Crea un `Order` **e** una `Position` paper con i parametri inviati (`entry_price`, TP/SL).
-
-✅ `GET /orders`  
+✅ GET /orders
 Lista tutti gli ordini, ordinati dal più recente.
 
----
-
-### 3.4 `/positions`
-
-✅ `GET /positions`  
+3.4 /positions
+✅ GET /positions
 Lista tutte le posizioni con:
 
-- `created_at`, `closed_at`
-- `close_price`, `pnl`
-- `auto_close_reason`
+created_at, closed_at
 
-✅ `POST /positions/{id}/close`  
+close_price, pnl
+
+auto_close_reason
+
+✅ POST /positions/{id}/close
 Chiusura manuale completa:
 
-- prezzo simulato da `MarketSimulator`,
-- `pnl` calcolato,
-- `auto_close_reason = "manual"`.
+prezzo simulato da MarketSimulator,
+
+pnl calcolato,
+
+auto_close_reason = "manual".
 
 ⬜ Filtri avanzati futuri:
 
-- per `symbol`,
-- per `status`,
-- per `strategy`,
-- per intervallo date, ecc.
+per symbol,
 
----
+per status,
 
-### 3.5 `/stats`
+per strategy,
 
-✅ Endpoint `GET /stats` con:
+per intervallo date, ecc.
 
-**Count base**
+3.5 /stats
+✅ Endpoint GET /stats con:
 
-- `total_positions`, `open_positions`, `closed_positions`
-- `winning_trades`, `losing_trades`
-- `tp_count`, `sl_count`
+Count base
 
-**PnL**
+total_positions, open_positions, closed_positions
 
-- `total_pnl`
-- `avg_pnl_per_trade`
-- `avg_pnl_win`
-- `avg_pnl_loss`
+winning_trades, losing_trades
 
-**Qualità**
+tp_count, sl_count
 
-- `winrate` (in % sui trade chiusi)
+PnL
+
+total_pnl
+
+avg_pnl_per_trade
+
+avg_pnl_win
+
+avg_pnl_loss
+
+Qualità
+
+winrate (in % sui trade chiusi)
 
 ⬜ Estensioni future:
 
-- stats per `symbol`, `exchange`, `strategy`,
-- stats per intervallo temporale.
+stats per symbol, exchange, strategy,
 
----
+stats per intervallo temporale.
 
-### 3.6 `/signals/bounce`
+3.6 /signals/bounce
+✅ Modello BounceSignal base:
 
-✅ Modello `BounceSignal` base:
-
-- `symbol`, `side`, `price`, `timestamp`.
+symbol, side, price, timestamp.
 
 ✅ Esteso con meta:
 
-- `exchange` (es. `bitget`, `bybit`),
-- `timeframe_min`,
-- `strategy` (es. `"bounce_ema10_strict"`),
-- `tp_pct`, `sl_pct` (percentuali di TP/SL).
+exchange (es. bitget, bybit),
+
+timeframe_min,
+
+strategy (es. "bounce_ema10_strict"),
+
+tp_pct, sl_pct (percentuali di TP/SL).
 
 ✅ Logging audit:
 
-- `log_bounce_signal(payload)` in formato JSONL,
-- datetime serializzati con `model_dump(mode="json")`.
+log_bounce_signal(payload) in formato JSONL,
 
-✅ Creazione automatica `Order + Position` paper (quando l’OMS è abilitato):
+datetime serializzati con model_dump(mode="json").
 
-- `entry_price = signal.price`,
-- `qty = DEFAULT_QTY` (o equivalente lato LOMS),
-- `tp_price` / `sl_price` calcolati da `tp_pct` / `sl_pct` per long/short,
-- `status = "created"` (order),
-- `status = "open"` (position).
+✅ Creazione automatica Order + Position paper (quando l’OMS è abilitato):
 
-✅ Normalizzazione `side` lato LOMS tramite `_normalize_side`:
+entry_price = signal.price,
 
-- gestisce `"buy"` / `"sell"`, `"long"` / `"short"` (maiuscole/miste),
-- garantisce un valore canonico `long` / `short` per il calcolo TP/SL.
+qty = DEFAULT_QTY (o equivalente lato LOMS),
+
+tp_price / sl_price calcolati da tp_pct / sl_pct per long/short,
+
+status = "created" (order),
+
+status = "open" (position).
+
+✅ Normalizzazione side lato LOMS tramite _normalize_side:
+
+gestisce "buy" / "sell", "long" / "short" (maiuscole/miste),
+
+garantisce un valore canonico long / short per il calcolo TP/SL.
 
 ✅ Integrazione risk engine base:
 
-- usa `check_risk_limits` per i limiti totali/per simbolo,
-- risponde sempre con `risk_ok` e `risk_reason`,
-- se i limiti sono superati → nessun ordine/posizione, risposta 200 con `risk_ok: false`.
+usa check_risk_limits per:
+
+totale aperte,
+
+aperte per simbolo,
+
+limite di notional per posizione,
+
+risponde sempre con risk_ok e risk_reason,
+
+se i limiti sono superati → nessun ordine/posizione, risposta 200 con risk_ok: false.
 
 ⬜ Validazioni aggiuntive:
 
-- idempotenza (evitare doppioni),
-- controlli sui valori (tp/sl troppo vicini o irrealistici, ecc.),
-- supporto futuro per altri tipi di segnali (stop, partial close, ecc.).
+idempotenza (evitare doppioni),
 
----
+controlli sui valori (tp/sl troppo vicini o irrealistici, ecc.),
 
-## 4. Scheduler & Background Tasks
+supporto futuro per altri tipi di segnali (stop, partial close, ecc.).
 
-### 4.1 Loop watcher
+4. Scheduler & Background Tasks
+4.1 Loop watcher
+✅ position_watcher() in app.core.scheduler:
 
-✅ `position_watcher()` in `app.core.scheduler`:
+loop infinito con asyncio.sleep(1),
 
-- loop infinito con `asyncio.sleep(1)`,
-- apre una `SessionLocal`,
-- chiama `auto_close_positions(db)` ogni secondo,
-- chiude la sessione.
+apre una SessionLocal,
 
-### 4.2 Integrazione FastAPI
+chiama auto_close_positions(db) ogni secondo,
 
-✅ `start_scheduler(app)` registrato con `@app.on_event("startup")`:
+chiude la sessione.
 
-- agganciato in `app.main` dopo la creazione delle tabelle.
+4.2 Integrazione FastAPI
+✅ start_scheduler(app) registrato con @app.on_event("startup"):
 
-### 4.3 Parametrizzazione frequenza
+agganciato in app.main dopo la creazione delle tabelle.
 
-⬜ Intervallo del watcher configurabile via env (es. `AUTO_CLOSE_INTERVAL_SEC`).
+4.3 Parametrizzazione frequenza
+⬜ Intervallo del watcher configurabile via env (es. AUTO_CLOSE_INTERVAL_SEC).
 
-### 4.4 Monitoring scheduler
-
+4.4 Monitoring scheduler
 ⬜ Contatori / log dedicati per vedere:
 
-- ogni quanto gira,
-- quante posizioni chiude,
-- eventuali errori/salti.
+ogni quanto gira,
 
----
+quante posizioni chiude,
 
-## 5. Configurazione & Environment
+eventuali errori/salti.
 
-### 5.1 Settings base
+5. Configurazione & Environment
+5.1 Settings base
+✅ Settings (app.core.config) con, tra gli altri:
 
-✅ `Settings` (`app.core.config`) con, tra gli altri:
+ENVIRONMENT
 
-- `DATABASE_URL`
-- `JWT_SECRET`
-- `AUDIT_LOG_PATH`
-- `OMS_ENABLED`
-- `MAX_OPEN_POSITIONS_TOTAL`
-- `MAX_OPEN_POSITIONS_PER_SYMBOL`
+DATABASE_URL
 
-### 5.2 Flag `OMS_ENABLED`
+AUDIT_LOG_PATH
 
-✅ `OMS_ENABLED: bool` in `Settings`:
+OMS_ENABLED
 
-- se `True`: `/signals/bounce` apre ordini/posizioni (se `risk_ok`),
-- se `False`: logga solo il segnale e non tocca il DB (risposta con `oms_enabled=false`).
+BROKER_MODE
 
-### 5.3 Profili dev/prod
+MAX_OPEN_POSITIONS
 
-⬜ Config separata dev/prod:
+MAX_OPEN_POSITIONS_PER_SYMBOL
 
-- DB diversi,
-- log path diversi,
-- valori diversi di `OMS_ENABLED` e parametri core.
+MAX_SIZE_PER_POSITION_USDT
 
-### 5.4 `.env.sample` / `.env.example`
+5.2 Flag OMS_ENABLED
+✅ OMS_ENABLED: bool in Settings:
 
-🟡 Parzialmente completo
+se True: /signals/bounce apre ordini/posizioni (se risk_ok),
 
-✅ File `services/cryptonakcore/.env.sample` creato con i campi minimi:
+se False: logga solo il segnale e non tocca il DB (risposta con oms_enabled=false).
 
-- `ENVIRONMENT`
-- `DATABASE_URL`
-- `AUDIT_LOG_PATH`
-- `OMS_ENABLED`
-- `MAX_OPEN_POSITIONS_TOTAL`
-- `MAX_OPEN_POSITIONS_PER_SYMBOL`
+5.3 Profili DEV / PAPER-SERVER
+🟡 Concetto e documentazione pronti, implementazione via .env
 
-⬜ Valutare se aggiungere anche un `.env.example` in root o una sezione dedicata nel README che punti esplicitamente a `.env.sample` come modello per la configurazione rapida.
+DEV (locale)
 
----
+ENVIRONMENT=dev
 
-## 6. Integrazione RickyBot → LOMS
+BROKER_MODE=paper
 
-### 6.1 Payload ufficiale RickyBot → LOMS (`POST /signals/bounce`)
+DATABASE_URL=sqlite:///./loms_dev.db (o loms.db semplice)
 
+AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl (opzionale)
+
+PAPER-SERVER (futuro Hetzner accanto a RickyBot, sempre paper):
+
+ENVIRONMENT=paper
+
+BROKER_MODE=paper
+
+DATABASE_URL=sqlite:///./loms_paper.db (o path assoluto sul server)
+
+AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl (opzionale)
+
+✅ Documentati nel README (sezione “Profili ambiente: DEV vs PAPER-SERVER”).
+⬜ Da concretizzare quando LOMS verrà effettivamente portato su Hetzner.
+
+5.4 .env.sample / .env.example
+✅ services/cryptonakcore/.env.sample aggiornato (2025-11-30) con:
+
+ENVIRONMENT
+
+DATABASE_URL
+
+AUDIT_LOG_PATH
+
+OMS_ENABLED
+
+BROKER_MODE
+
+MAX_OPEN_POSITIONS
+
+MAX_OPEN_POSITIONS_PER_SYMBOL
+
+MAX_SIZE_PER_POSITION_USDT
+
+⬜ Valutare in futuro un .env.example in root o solo una sezione dedicata nel README che punti a .env.sample come modello.
+
+6. Integrazione RickyBot → LOMS
+6.1 Payload ufficiale RickyBot → LOMS (POST /signals/bounce)
 Il servizio LOMS espone:
 
-- `POST /signals/bounce`
-- `Content-Type: application/json`
-- Body: oggetto JSON conforme al modello `BounceSignal`.
+POST /signals/bounce
 
-**Schema `BounceSignal` (JSON):**
+Content-Type: application/json
 
-- `symbol` (string, ✅) – coppia di trading (es. `"BTCUSDT"`).
-- `side` (string, ✅) – `"long"` / `"short"` o `"buy"` / `"sell"`.
-- `price` (number, ✅) – prezzo di ingresso (entry price paper).
-- `timestamp` (string, ✅) – ISO8601 (es. `"2025-11-27T01:40:00Z"`).
-- `exchange` (string, ❌, default `"bitget"`) – nome exchange (`"bitget"`, `"bybit"`, …).
-- `timeframe_min` (integer, ❌, default `5`) – timeframe in minuti (1, 3, 5, 15, …).
-- `strategy` (string, ❌, default `"bounce_ema10_strict"`) – strategia che ha generato il segnale.
-- `tp_pct` (number, ❌, default 4.5 lato LOMS) – Take Profit % rispetto a `price`.
-- `sl_pct` (number, ❌, default 1.5 lato LOMS) – Stop Loss % rispetto a `price`.
+Body: oggetto JSON conforme al modello BounceSignal.
 
-**Calcolo TP/SL lato LOMS (dato `entry_price = price`):**
+Schema BounceSignal (JSON):
 
-- Long:
-  - `tp_price = entry_price * (1 + tp_pct/100)`
-  - `sl_price = entry_price * (1 - sl_pct/100)` (se `sl_pct` non è null)
-- Short:
-  - `tp_price = entry_price * (1 - tp_pct/100)`
-  - `sl_price = entry_price * (1 + sl_pct/100)` (se `sl_pct` non è null)
+symbol (string, ✅) – coppia di trading (es. "BTCUSDT").
 
-Se `tp_pct` o `sl_pct` non sono inviati, vengono usati i default lato LOMS (es. 4.5 / 1.5).
+side (string, ✅) – "long" / "short" o "buy" / "sell".
 
-**Comportamento `/signals/bounce`:**
+price (number, ✅) – prezzo di ingresso (entry price paper).
 
-- logga sempre il segnale su file JSONL (`AUDIT_LOG_PATH`),
-- se `OMS_ENABLED=false`:
-  - non crea ordini/posizioni,
-  - risponde con `oms_enabled=false`,
-- se `OMS_ENABLED=true`:
-  - chiama il risk engine,
-  - se `risk_ok=false` → blocca e risponde con `risk_reason`,
-  - se `risk_ok=true` → crea `Order + Position` e risponde con `order_id`, `position_id`, `tp_price`, `sl_price`.
+timestamp (string, ✅) – ISO8601 (es. "2025-11-27T01:40:00Z").
 
----
+exchange (string, ❌, default "bitget") – nome exchange ("bitget", "bybit", …).
 
-### 6.2 Client HTTP in RickyBot
+timeframe_min (integer, ❌, default 5) – timeframe in minuti (1, 3, 5, 15, …).
 
+strategy (string, ❌, default "bounce_ema10_strict") – strategia che ha generato il segnale.
+
+tp_pct (number, ❌, default 4.5 lato LOMS) – Take Profit % rispetto a price.
+
+sl_pct (number, ❌, default 1.5 lato LOMS) – Stop Loss % rispetto a price.
+
+Calcolo TP/SL lato LOMS (dato entry_price = price):
+
+Long:
+
+tp_price = entry_price * (1 + tp_pct/100)
+
+sl_price = entry_price * (1 - sl_pct/100) (se sl_pct non è null)
+
+Short:
+
+tp_price = entry_price * (1 - tp_pct/100)
+
+sl_price = entry_price * (1 + sl_pct/100) (se sl_pct non è null)
+
+Se tp_pct o sl_pct non sono inviati, vengono usati i default lato LOMS (es. 4.5 / 1.5).
+
+Comportamento /signals/bounce:
+
+logga sempre il segnale su file JSONL (AUDIT_LOG_PATH),
+
+se OMS_ENABLED=false:
+
+non crea ordini/posizioni,
+
+risponde con oms_enabled=false,
+
+se OMS_ENABLED=true:
+
+chiama il risk engine,
+
+se risk_ok=false → blocca e risponde con risk_reason,
+
+se risk_ok=true → crea Order + Position e risponde con order_id, position_id, tp_price, sl_price.
+
+6.2 Client HTTP in RickyBot
 ✅ Già implementato
 
-- File: `bots/rickybot/clients/loms_client.py`
-- Usa `RuntimeConfig` (`config.loms_enabled`, `config.loms_base_url`).
+File: bots/rickybot/clients/loms_client.py
+
+Usa RuntimeConfig (config.loms_enabled, config.loms_base_url).
 
 Gestione:
 
-- se `LOMS_ENABLED=false` → log `loms_skip` e non chiama il servizio,
-- se `LOMS_BASE_URL` manca → log `loms_skip`,
-- chiamata HTTP `POST /signals/bounce` con timeout 5s,
-- parsing della risposta JSON.
+se LOMS_ENABLED=false → log loms_skip e non chiama il servizio,
+
+se LOMS_BASE_URL manca → log loms_skip,
+
+chiamata HTTP POST /signals/bounce con timeout 5s,
+
+parsing della risposta JSON.
 
 Logging strutturato:
 
-- `loms_http_error`
-- `loms_conn_error`
-- `loms_error` (invalid JSON)
-- `loms_oms_disabled`
-- `loms_risk_reject` (con `risk_reason`)
-- `loms_order_created` (con `order_id`, `position_id`, `tp_price`, `sl_price`)
+loms_http_error
+
+loms_conn_error
+
+loms_error (invalid JSON)
+
+loms_oms_disabled
+
+loms_risk_reject (con risk_reason)
+
+loms_order_created (con order_id, position_id, tp_price, sl_price)
 
 Tool di test collegato:
 
-- `tools/test_notify_loms.py` → usa il client per inviare un segnale finto e mostra la risposta LOMS.
+tools/test_notify_loms.py → usa il client per inviare un segnale finto e mostra la risposta LOMS.
 
----
-
-### 6.3 Modalità paper-only
-
+6.3 Modalità paper-only
 ✅ Pipeline RickyBot → LOMS solo paper:
 
-- LOMS lavora su SQLite,
-- nessun ordine reale sull’exchange,
-- RickyBot invia i segnali (quando `LOMS_ENABLED=true`),
-- LOMS gestisce ordini/posizioni simulate, auto-close e stats.
+LOMS lavora su SQLite,
 
----
+nessun ordine reale sull’exchange,
 
-### 6.4 Toggle lato RickyBot
+RickyBot invia i segnali (quando LOMS_ENABLED=true),
 
+LOMS gestisce ordini/posizioni simulate, auto-close e stats.
+
+6.4 Toggle lato RickyBot
 🟡 In gran parte fatto
 
-In `RuntimeConfig` esistono:
+In RuntimeConfig esistono:
 
-- `loms_enabled`
-- `loms_base_url`
+loms_enabled
 
-In `.env` / `.env.local` di RickyBot:
+loms_base_url
 
-- `LOMS_ENABLED=true/false`
-- `LOMS_BASE_URL=http://127.0.0.1:8000` (per i test locali)
+In .env / .env.local di RickyBot:
+
+LOMS_ENABLED=true/false
+
+LOMS_BASE_URL=http://127.0.0.1:8000 (per i test locali)
 
 Da rifinire (opzionale):
 
-⬜ eventuale `LOMS_TIMEOUT_SEC` configurabile (ora timeout è hardcoded a 5s),  
-⬜ documentare in modo chiaro la distinzione dev/prod (es. `LOMS_ENABLED=false` su Hetzner, `true` in locale).
+⬜ eventuale LOMS_TIMEOUT_SEC configurabile (ora timeout è hardcoded a 5s),
+⬜ documentare in modo chiaro la distinzione dev/prod (es. LOMS_ENABLED=false su Hetzner, true in locale).
 
----
-
-### 6.5 Logging lato RickyBot
-
+6.5 Logging lato RickyBot
 ✅ Audit minimo degli esiti LOMS:
 
-- in `loms_client`:
-  - log per skip,
-  - errori HTTP/rete,
-  - `oms_enabled`,
-  - `risk_ok` / `risk_reason`,
-  - `order_id` / `position_id` (quando creati).
-- in `notify_bounce_alert`:
-  - log `loms_alert_sent` con `symbol`, `side` normalizzato, `price` e `response`.
+in loms_client:
 
----
+log per skip,
 
-## 7. Monitoring & Strumenti di Analisi
+errori HTTP/rete,
 
-### 7.1 `/stats` come mini-dashboard
+oms_enabled,
 
-✅ `/stats` viene usato per verificare:
+risk_ok / risk_reason,
 
-- numero di trade,
-- qualità (winrate),
-- distribuzione TP/SL,
-- PnL totale e medio.
+order_id / position_id (quando creati).
 
-### 7.2 Script CLI per stats
+in notify_bounce_alert:
 
-✅ `tools/print_stats.py` creato e funzionante.
+log loms_alert_sent con symbol, side normalizzato, price e response.
+
+7. Monitoring & Strumenti di Analisi
+7.1 /stats come mini-dashboard
+✅ /stats viene usato per verificare:
+
+numero di trade,
+
+qualità (winrate),
+
+distribuzione TP/SL,
+
+PnL totale e medio.
+
+7.2 Script CLI per stats
+✅ tools/print_stats.py creato e funzionante.
 
 Caratteristiche:
 
-- chiama `GET /stats` su `BASE_URL` (default `http://127.0.0.1:8000`);
-- gestisce errori HTTP (`[HTTP ERROR]`) e di connessione (`[CONNECTION ERROR]`)
-  con messaggio chiaro e hint per avviare il server (`uvicorn app.main:app --reload`);
-- stampa in console uno snapshot ordinato:
-  - `total_positions`, `open_positions`, `closed_positions`
-  - `winning_trades`, `losing_trades`, `tp_count`, `sl_count`
-  - `total_pnl`
-  - `winrate`
-  - `avg_pnl_per_trade`, `avg_pnl_win`, `avg_pnl_loss`
-- i float sono formattati con 4 decimali, `None` viene mostrato come `-`.
+chiama GET /stats su BASE_URL (default http://127.0.0.1:8000);
+
+gestisce errori HTTP ([HTTP ERROR]) e di connessione ([CONNECTION ERROR])
+con messaggio chiaro e hint per avviare il server (uvicorn app.main:app --reload);
+
+stampa in console uno snapshot ordinato:
+
+total_positions, open_positions, closed_positions
+
+winning_trades, losing_trades, tp_count, sl_count
+
+total_pnl
+
+winrate
+
+avg_pnl_per_trade, avg_pnl_win, avg_pnl_loss
+
+i float sono formattati con 4 decimali, None viene mostrato come -.
 
 Uso tipico con LOMS in locale:
 
-```bash
+bash
+Copia codice
 python tools/print_stats.py
 7.3 Log strutturato per chiusure
 ✅ Logging in auto_close_positions con dict Python (evento position_closed).
@@ -498,6 +609,30 @@ PnL day-by-day,
 
 breakdown per symbol/strategy.
 
+7.5 Script CLI per health
+✅ tools/check_health.py creato e funzionante.
+
+chiama GET /health su BASE_URL (default http://127.0.0.1:8000);
+
+gestisce errori HTTP / connessione con messaggi leggibili;
+
+stampa:
+
+HTTP status code,
+
+Service status,
+
+Environment (es. dev),
+
+Broker mode (es. paper),
+
+JSON completo della risposta.
+
+Uso tipico:
+
+bash
+Copia codice
+python tools/check_health.py
 8. Fase 2+ (Risk Engine & Live)
 8.1 Risk engine completo
 ⬜ Regole come:
@@ -545,12 +680,15 @@ Obiettivo: avere un client HTTP unico e pulito lato RickyBot che chiama POST /si
 Stato:
 
 ✅ bots/rickybot/clients/loms_client.py già operativo (con timeout fisso 5s).
+
 ✅ Payload allineato allo schema BounceSignal (campi: symbol, side, price, timestamp, exchange, timeframe_min, strategy, tp_pct, sl_pct).
+
 ✅ tools/test_notify_loms.py usa il client e stampa la risposta LOMS.
 
 Da rifinire (opzionale):
 
 ⬜ aggiungere parametri CLI a tools/test_notify_loms.py (--symbol, --side, --price, --tp, --sl),
+
 ⬜ rendere configurabile LOMS_TIMEOUT_SEC.
 
 9.2 Step 2 – Integrare il client nel runner RickyBot (dev / paper)
@@ -571,9 +709,13 @@ costruisce il payload e chiama send_bounce_to_loms,
 logga loms_alert_sent.
 
 ✅ RuntimeState ha il campo config: Optional[RuntimeConfig].
+
 ✅ setup_runtime passa settings dentro RuntimeState(config=settings).
+
 ✅ scanner.run_scanner_tick legge runtime.config e lo passa a run_scan_loop_once.
+
 ✅ scan_service.scan_symbol chiama notify_bounce_alert (Telegram + LOMS) quando runtime_config non è None e c’è un alert Bounce Strict; altrimenti usa il fallback send_telegram.
+
 ✅ tools/test_notify_notifier_loms.py verifica questa catena end-to-end senza bisogno di alert reali.
 
 Da fare (organizzazione dev/prod):
@@ -585,9 +727,7 @@ LOMS_ENABLED=true in locale,
 LOMS_ENABLED=false su Hetzner (documentato in README / runbook).
 
 9.3 Step 3 – Test end-to-end locale (RickyBot → LOMS → /stats) con alert reali
-✅ Completato (primo test con alert reale KGENUSDT)
-
-Obiettivo: validare che tutta la catena funzioni in locale con il runner reale, non solo con gli script di test.
+✅ Completato (primo test con alert reale: segnale reale → ordine+posizione paper → auto-close)
 
 Scenario eseguito:
 
@@ -603,7 +743,7 @@ LOMS_ENABLED=true,
 
 preset di test (GAINERS_PERP 5m su Bitget, top_n piccolo).
 
-Verificato che, su un alert reale Bounce Strict (es. KGENUSDT short):
+Verificato che, su un alert reale Bounce Strict:
 
 il runner chiama notify_bounce_alert,
 
@@ -616,7 +756,7 @@ auto_close_reason="tp" o "sl".
 
 Risultati controllati tramite:
 
-GET /positions (position con status="closed" e auto_close_reason="sl"),
+GET /positions (position con status="closed" e auto_close_reason valorizzato),
 
 GET /stats e python tools/print_stats.py per:
 
