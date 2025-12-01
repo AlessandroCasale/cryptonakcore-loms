@@ -18,7 +18,9 @@ async def health():
         "ok": True,
         "service": "CryptoNakCore LOMS",
         "status": "ok",
-        "environment": settings.environment,
-        "broker_mode": settings.broker_mode,
-        "oms_enabled": settings.oms_enabled,
+        "environment": settings.ENVIRONMENT,
+        "broker_mode": settings.BROKER_MODE,
+        "oms_enabled": settings.OMS_ENABLED,
+        "database_url": settings.DATABASE_URL,
+        "audit_log_path": settings.AUDIT_LOG_PATH,
     }

@@ -51,6 +51,8 @@ def main() -> None:
     environment = data.get("environment")
     broker_mode = data.get("broker_mode")
     oms_enabled = data.get("oms_enabled")
+    database_url = data.get("database_url")
+    audit_log_path = data.get("audit_log_path")
 
     if status is not None:
         print(f"Service status  : {status}")
@@ -65,6 +67,12 @@ def main() -> None:
 
     if oms_enabled is not None:
         print(f"OMS enabled     : {oms_enabled}")
+
+    if database_url is not None:
+        print(f"Database URL    : {database_url}")
+
+    if audit_log_path is not None:
+        print(f"Audit log path  : {audit_log_path}")
 
     print(f"Raw JSON        : {data}")
 
