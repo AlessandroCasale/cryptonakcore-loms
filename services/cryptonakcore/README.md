@@ -470,3 +470,51 @@ Verifica che il servizio risponda e che `/health` sia `status: "ok"`:
 
 ```bash
 python tools/check_health.py
+
+
+## Profili ambiente: DEV vs PAPER-SERVER
+
+Per ora LOMS gira **solo in modalità paper**, ma è utile distinguere due profili:
+
+- **DEV (locale)**  
+  Ambiente sul tuo PC per sviluppare e testare:
+
+  - `ENVIRONMENT=dev`
+  - `BROKER_MODE=paper`
+  - `DATABASE_URL=sqlite:///./loms_dev.db` *(esempio, puoi tenere anche `loms.db` se vuoi)*  
+  - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl` *(opzionale)*
+
+  Flow tipico:
+
+  ```bash
+  # Attiva venv
+  .venv\Scripts\activate   # su Windows
+
+  # Avvia LOMS in dev
+  uvicorn app.main:app --reload
+
+  # Controlla stato
+  python tools/check_health.py
+  python tools/print_stats.py
+PAPER-SERVER (Hetzner o altro)
+Ambiente che in futuro potrà girare su un server remoto, sempre in paper:
+
+ENVIRONMENT=paper
+
+BROKER_MODE=paper
+
+DATABASE_URL=sqlite:///./loms_paper.db (o un path assoluto sul server)
+
+AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl (opzionale)
+
+Idea operativa:
+
+una copia del repo sul server,
+
+un .env separato rispetto al tuo PC locale,
+
+stessi comandi di health/stats, ma lanciati da remoto (ssh) invece che in locale.
+
+Nota: per ora usi solo il profilo DEV locale. Il profilo PAPER-SERVER serve
+solo come “forma mentale” e documentazione per quando deciderai di portare
+LOMS su Hetzner accanto a RickyBot.
