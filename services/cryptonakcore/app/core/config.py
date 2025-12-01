@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./cryptonakcore_loms.db"
     JWT_SECRET: str = "dev-secret"
 
+    # Ambiente logico del servizio: dev / paper / live (per ora usiamo dev/paper)
+    ENVIRONMENT: str = "dev"
+
+    # Modalità broker: per ora supportato solo "paper".
+    # "live" è riservato per il futuro, ma il flag serve già come kill-switch logico.
+    BROKER_MODE: str = "paper"
+
     # Abilita/disabilita l’apertura automatica di ordini/posizioni dai segnali
     OMS_ENABLED: bool = True
 

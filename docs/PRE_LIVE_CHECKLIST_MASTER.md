@@ -66,8 +66,6 @@ rollback immediato.
 
 ### 3.1 Risk LOMS
 
-### 3.1 Risk LOMS
-
 - [x] Parametri da env letti in `Settings`:
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
@@ -81,7 +79,6 @@ rollback immediato.
   - [x] logga `risk_block` con motivo,
   - [x] accetta `None` come “nessun limite” (se in futuro lo vorrai usare così).
 
-
 ### 3.2 Risk RickyBot (futuro)
 
 - [ ] Aggiungere in `.env` RickyBot (dev/live):
@@ -91,8 +88,9 @@ rollback immediato.
 
 ### 3.3 Kill switch & modalità broker
 
-- [ ] Flag LOMS:
-  - [ ] `BROKER_MODE=paper|live` (per ora sempre `paper`).
+- [x] Flag LOMS:
+  - [x] `BROKER_MODE=paper|live` (per ora sempre `paper`, esposto in `/health`
+        e visualizzabile con `python tools/check_health.py`).
 - [ ] Procedura emergenza:
   - [ ] set `OMS_ENABLED=false` in env,
   - [ ] restart LOMS,
@@ -117,7 +115,7 @@ rollback immediato.
 ### 4.2 Checklist operativa
 
 - [ ] Scrivere mini checklist “pre-apertura” (server + LOMS + RickyBot + log).
-- [ ] Scrivere mini checklist “post-giornata” (export /stats, log errori, eventuale backup DB/JSONL).
+- [ ] Scrivere mini checklist “post-giornata” (export `/stats`, log errori, eventuale backup DB/JSONL).
 
 ---
 
@@ -129,7 +127,7 @@ rollback immediato.
 - [ ] Configurare RickyBot dev con:
   - [ ] parametri vicini ai futuri semi-live,
   - [ ] `LOMS_ENABLED=true`,
-  - [ ] `BROKER_MODE=paper` (quando disponibile).
+  - [ ] `BROKER_MODE=paper`.
 - [ ] Lasciare girare per N giorni (es. 5–10).
 
 ### 5.2 Analisi Shadow
@@ -188,5 +186,6 @@ rollback immediato.
 
 - [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
 - [ ] Definire meglio profili `DEV` vs `PAPER-SERVER`.
-- [ ] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine.
+- [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine
+      (✅ fatto 2025-11-30, vedi sezione 3.1).
 - [ ] Avviare una prima Shadow Mode locale di qualche giorno.

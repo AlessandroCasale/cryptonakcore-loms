@@ -43,17 +43,25 @@ def main() -> None:
 
     print(f"HTTP status code : {status_code}")
 
-    if data is None:
+    if data is None or not isinstance(data, dict):
         print("Body JSON       : <non valido / non parseable>")
         return
 
-    # Proviamo a leggere un campo 'status' se presente
-    status = data.get("status") if isinstance(data, dict) else None
-
+    # Campo 'status' se presente
+    status = data.get("status")
     if status is not None:
         print(f"Service status  : {status}")
     else:
         print("Service status  : <campo 'status' non presente>")
+
+    # Campi opzionali: environment / broker_mode
+    env = data.get("environment")
+    broker_mode = data.get("broker_mode")
+
+    if env is not None:
+        print(f"Environment     : {env}")
+    if broker_mode is not None:
+        print(f"Broker mode     : {broker_mode}")
 
     print(f"Raw JSON        : {data}")
 
