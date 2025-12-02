@@ -4,6 +4,13 @@
 FastAPI microservice che funge da **OMS** (Order Management System) in modalità **paper**  
 (per il momento niente ordini reali) a supporto del trading bot **RickyBot**.
 
+Stato attuale (2025-12-02):
+
+- LOMS gira in **DEV** sul PC locale.
+- LOMS gira in **PAPER-SERVER** su Hetzner (`rickybot-01`) accanto a RickyBot.
+- RickyBot → LOMS è collegato in **Shadow Mode**: gli alert reali del bot generano
+  **Order + Position paper** in LOMS, con TP/SL simulati e PnL esposto via API.
+
 L’idea:
 
 > RickyBot genera un segnale → LOMS lo riceve → valida rischio → crea **Order + Position paper**  
@@ -24,6 +31,10 @@ L’idea:
   - vedere ordini e posizioni,
   - interrogare il “mercato” simulato,
   - calcolare **statistiche** (PnL, winrate, TP/SL count…).
+- ✅ Implementare un **risk engine base**:
+  - numero massimo di posizioni aperte totali,
+  - numero massimo di posizioni per simbolo,
+  - limite sulla **size notional** per posizione (`entry_price * qty`).
 - 🔜 In futuro:
   - engine rischio più avanzato,
   - integrazione con broker reali (Bitget/Bybit),
@@ -40,8 +51,12 @@ cryptonakcore-loms/
 │
 ├── services/
 │   └── cryptonakcore/
+│       ├── .env / .env.sample
+│       ├── data/
+│       │   ├── loms_dev.db / loms_paper.db
+│       │   └── bounce_signals_*.jsonl
 │       └── app/
-│           ├── main.py              # FastAPI app, include tutte le route
+│           ├── main.py              # FastAPI app, include tutte le route + startup scheduler
 │           ├── core/
 │           │   └── config.py        # Settings (ENVIRONMENT, OMS_ENABLED, BROKER_MODE, risk, ecc.)
 │           ├── db/
@@ -60,12 +75,13 @@ cryptonakcore-loms/
 │               └── stats.py         # /stats
 │
 ├── tools/
-│   ├── check_health.py              # chiama /health e stampa stato
+│   ├── check_health.py              # chiama /health e stampa stato (env, broker_mode, ecc.)
 │   ├── print_stats.py               # chiama /stats e stampa PnL, winrate, ecc.
 │   └── test_bounce_size_limit.py    # mini test per il limite sulla size notional
 │
 ├── docs/
-│   ├── PRE_LIVE_ROADMAP.md
+│   ├── LOMS_CHECKLIST_MASTER.md     # Jira-style checklist LOMS
+│   ├── PRE_LIVE_ROADMAP.md         # Roadmap pre-live 100€
 │   └── PRE_LIVE_CHECKLIST_MASTER.md
 │
 ├── services/cryptonakcore/.env.sample
@@ -108,7 +124,8 @@ Dalla root del repo:
 
 bash
 Copia codice
-uvicorn services.cryptonakcore.app.main:app --reload
+cd services/cryptonakcore
+uvicorn app.main:app --reload
 Per default il server parte su http://127.0.0.1:8000.
 
 Documentazione interattiva:
@@ -131,18 +148,19 @@ bash
 Copia codice
 python tools/print_stats.py
 Tail dei log audit
-(se AUDIT_LOG_PATH punta al file JSONL di audit, ad esempio services/cryptonakcore/data/bounce_signals.jsonl):
+(se AUDIT_LOG_PATH punta al file JSONL di audit, ad esempio
+services/cryptonakcore/data/bounce_signals_dev.jsonl):
 
 PowerShell:
 
 powershell
 Copia codice
-Get-Content -Path .\services\cryptonakcore\data\bounce_signals.jsonl -Wait
+Get-Content -Path .\services\cryptonakcore\data\bounce_signals_dev.jsonl -Wait
 Bash:
 
 bash
 Copia codice
-tail -f services/cryptonakcore/data/bounce_signals.jsonl
+tail -f services/cryptonakcore/data/bounce_signals_dev.jsonl
 4. API principali (overview)
 Più in dettaglio lo vedi da /docs, qui la mappa mentale:
 
@@ -156,8 +174,21 @@ Copia codice
   "service": "CryptoNakCore LOMS",
   "status": "ok",
   "environment": "dev",
-  "broker_mode": "paper"
+  "broker_mode": "paper",
+  "oms_enabled": true,
+  "database_url": "sqlite:///./services/cryptonakcore/data/loms_dev.db",
+  "audit_log_path": "services/cryptonakcore/data/bounce_signals_dev.jsonl"
 }
+Serve per:
+
+vedere se il servizio risponde,
+
+leggere environment (dev, paper, in futuro live),
+
+leggere broker_mode (paper vs live),
+
+sapere quale DB e quale audit JSONL sta usando.
+
 POST /signals/bounce
 Endpoint principale chiamato da RickyBot per ogni segnale Bounce.
 
@@ -228,7 +259,7 @@ tp_pct (float) – TP in percentuale (es. 4.5 = +4.5%).
 sl_pct (float) – SL in percentuale (es. 1.5 = -1.5%).
 
 Nota: se RickyBot non specifica tp_pct / sl_pct, il LOMS può applicare default
-interni (vedi DEFAULT_TP_PCT / DEFAULT_SL_PCT in api/signals.py).
+interni (es. DEFAULT_TP_PCT / DEFAULT_SL_PCT in api/signals.py).
 
 5.2 Comportamento lato LOMS
 Valida il payload (Pydantic BounceSignal).
@@ -332,7 +363,7 @@ auto_close_reason:
 
 "sl" – chiusa dal simulatore per SL,
 
-altre stringhe per eventuale chiusura manuale in futuro.
+altre stringhe per eventuale chiusura manuale ("manual", ecc.).
 
 6.3 GET /positions
 Ritorna l’elenco di posizioni (aperte + chiuse) con i campi sopra. Utile per:
@@ -373,9 +404,9 @@ Campi chiave attuali (vedi anche services/cryptonakcore/.env.sample):
 
 ENVIRONMENT (dev | paper | live in futuro)
 
-DATABASE_URL (es. sqlite:///./loms.db)
+DATABASE_URL (es. sqlite:///./services/cryptonakcore/data/loms_dev.db)
 
-AUDIT_LOG_PATH (es. services/cryptonakcore/data/bounce_signals.jsonl)
+AUDIT_LOG_PATH (es. services/cryptonakcore/data/bounce_signals_dev.jsonl)
 
 OMS_ENABLED (bool)
 
@@ -392,7 +423,7 @@ Esempio .env minimale per sviluppo:
 env
 Copia codice
 ENVIRONMENT=dev
-DATABASE_URL=sqlite:///./loms_dev.db
+DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db
 AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl
 
 OMS_ENABLED=true
@@ -419,9 +450,9 @@ ENVIRONMENT=dev
 
 BROKER_MODE=paper
 
-DATABASE_URL=sqlite:///./loms_dev.db (esempio, puoi tenere anche loms.db se vuoi)
+DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db
 
-AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl (opzionale)
+AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl
 
 Flow tipico:
 
@@ -431,37 +462,50 @@ Copia codice
 .\.venv\Scripts\activate
 
 # Avvia LOMS in dev
-uvicorn services.cryptonakcore.app.main:app --reload
+cd services/cryptonakcore
+uvicorn app.main:app --reload
 
-# Controlla stato
+# Controlla stato (dalla root)
+cd ../..
 python tools/check_health.py
 python tools/print_stats.py
-8.2 PAPER-SERVER (Hetzner o altro)
-Ambiente che in futuro potrà girare su un server remoto, sempre in paper:
+8.2 PAPER-SERVER (Hetzner / server remoto)
+Ambiente su server remoto, sempre in paper:
 
 ENVIRONMENT=paper
 
 BROKER_MODE=paper
 
-DATABASE_URL=sqlite:///./loms_paper.db (o un path assoluto sul server)
+DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db
 
-AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl (opzionale)
+AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl
 
-Idea operativa:
+OMS_ENABLED=true
 
-una copia del repo sul server,
+Idea operativa su Hetzner:
 
-un .env separato rispetto al tuo PC locale,
+repo clonata in /root/cryptonakcore-loms,
 
-stessi comandi di health/stats, ma lanciati da remoto (ssh) invece che in locale.
+.venv dedicata sul server,
 
-Nota: per ora usi solo il profilo DEV locale.
-Il profilo PAPER-SERVER serve solo come “forma mentale” e documentazione
-per quando deciderai di portare LOMS su Hetzner accanto a RickyBot.
+.env con profilo PAPER-SERVER,
+
+LOMS avviato in tmux (es. sessione loms-paper) con:
+
+bash
+Copia codice
+cd ~/cryptonakcore-loms/services/cryptonakcore
+source ../../.venv/bin/activate
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+Attualmente (2025-12-02):
+
+DEV locale usato per sviluppo / test mirati.
+
+PAPER-SERVER su Hetzner usato in Shadow Mode con RickyBot (solo paper).
 
 9. Checklist operativa (solo paper)
-Questa checklist è pensata per l’uso in modalità paper (sia in DEV che in un futuro
-profilo PAPER-SERVER).
+Questa checklist è pensata per l’uso in modalità paper (sia in DEV che in profilo
+PAPER-SERVER).
 
 9.1 Prima di avviare tutto (pre-apertura)
 Attiva l’ambiente virtuale (sulla macchina dove gira LOMS):
@@ -469,13 +513,17 @@ Attiva l’ambiente virtuale (sulla macchina dove gira LOMS):
 bash
 Copia codice
 # Windows (PowerShell)
-.venv\Scripts\activate
+.\.venv\Scripts\activate
+# oppure bash
+source .venv/bin/activate
 Avvia LOMS (se non è già in esecuzione):
 
 bash
 Copia codice
 cd services/cryptonakcore
 uvicorn app.main:app --reload
+(su server: stesso comando ma lanciato in tmux, es. sessione loms-paper).
+
 Controlla che il servizio risponda (health):
 
 Dalla root del repo:
@@ -489,9 +537,11 @@ HTTP status code : 200
 
 Service status : ok
 
-Environment : dev (o paper, a seconda del profilo)
+Environment : dev (o paper)
 
 Broker mode : paper
+
+OMS enabled : True (se vuoi che apra posizioni)
 
 Controlla le statistiche di base (stats):
 
@@ -500,15 +550,16 @@ Copia codice
 python tools/print_stats.py
 Prima di iniziare una nuova giornata “pulita” è consigliabile:
 
-Open positions : 0 (nessuna posizione lasciata aperta per sbaglio),
+open_positions : 0 (nessuna posizione lasciata aperta per sbaglio),
 
-verificare che i numeri di Total positions, TP count, SL count abbiano senso
+verificare che i numeri di total_positions, tp_count, sl_count abbiano senso
 rispetto ai giorni precedenti.
 
 (Se usi anche RickyBot con LOMS)
 
-Verifica che il runner RickyBot sia in esecuzione (tmux / log) e che la chat Telegram
-riceva heartbeat come al solito.
+Verifica che il runner RickyBot sia in esecuzione (tmux / log).
+
+Verifica che la chat Telegram riceva heartbeat come al solito.
 
 9.2 A fine giornata (post-giornata)
 Snapshot veloce delle stats:
@@ -518,37 +569,37 @@ Copia codice
 python tools/print_stats.py
 Puoi annotare (anche solo mentalmente):
 
-Total positions,
+total_positions,
 
-Winning trades / Losing trades,
+winning_trades / losing_trades,
 
-Total PnL,
+total_pnl,
 
-Winrate (%).
+winrate (%).
 
 Controlla eventuali errori nei log:
 
-log applicativi LOMS (stderr / file a seconda di come lo avvierai in futuro),
+log applicativi LOMS (stderr / tmux),
 
 eventuali messaggi sospetti su risk_block o errori di auto_close_positions.
 
 (Opzionale) Backup rapido dei dati:
 
-copia il DB SQLite (ad es. loms_dev.db o loms_paper.db) in una cartella di backup
+copia il DB SQLite (es. loms_dev.db o loms_paper.db) in una cartella backups/
 con data,
 
-copia anche il file JSONL dei segnali (bounce_signals*.jsonl) se vuoi tenere
+copia anche il file JSONL dei segnali (bounce_signals_*.jsonl) se vuoi tenere
 uno storico separato.
 
 Verifica che non restino posizioni aperte per sbaglio:
 
-controlla che Open positions : 0 in print_stats.py,
+controlla che open_positions : 0 in print_stats.py,
 
 in futuro, quando ci sarà un broker reale, servirà anche verificare il sub-account
 sull’exchange.
 
 10. Integrazione con RickyBot
-Sul lato RickyBot (repo separata) esiste un piccolo client HTTP:
+Sul lato RickyBot (repo separata) esiste un client HTTP:
 
 python
 Copia codice
@@ -563,8 +614,6 @@ legge in RuntimeConfig i campi:
 loms_enabled ← (LOMS_ENABLED in .env di RickyBot),
 
 loms_base_url ← (LOMS_BASE_URL in .env di RickyBot),
-
-eventuali default per TP/SL.
 
 se loms_enabled=False → non chiama il servizio (logga un evento loms_skip).
 
@@ -605,12 +654,17 @@ GET /stats
 
 log di LOMS + RickyBot.
 
+Attualmente (2025-12-02) questo flusso è attivo in Shadow Mode su Hetzner:
+nessun ordine reale verso exchange, solo posizioni paper.
+
 11. Roadmap v1 (sintesi)
-Stato attuale (baseline paper pre-live – 2025-11-30):
+Stato attuale (baseline paper pre-live – 2025-12-02):
 
-✅ Modelli Order / Position allineati (tp_price, sl_price, close_price, closed_at, pnl, auto_close_reason).
+✅ Modelli Order / Position allineati
+(tp_price, sl_price, close_price, closed_at, pnl, auto_close_reason).
 
-✅ Scheduler auto_close_positions funzionante (chiusura TP/SL su prezzi simulati, con protezione età posizione).
+✅ Scheduler auto_close_positions funzionante
+(chiusura TP/SL su prezzi simulati, con protezione età posizione).
 
 ✅ Endpoint funzionanti:
 
@@ -626,7 +680,21 @@ limiti per simbolo,
 
 limite sulla size notional (MAX_SIZE_PER_POSITION_USDT).
 
-✅ Integrazione di test con RickyBot (anche con segnali reali).
+✅ Strumenti CLI:
+
+tools/check_health.py,
+
+tools/print_stats.py,
+
+tools/test_bounce_size_limit.py.
+
+✅ Integrazione paper con RickyBot:
+
+testata in locale,
+
+collegata in Shadow Mode su Hetzner,
+
+primi trade paper BTCUSDT (long/short) chiusi con TP/SL visti su /positions e /stats.
 
 Prossimi passi (idea, non vincolante):
 
@@ -642,7 +710,7 @@ whitelist simboli.
 
 ⬜ Prima bozza di broker reale (es. Bitget via API) con flag separato tipo BROKER_MODE=paper|live.
 
-⬜ Eventuale autenticazione sull’API (token) per evitare che “chiunque” chiami /signals/bounce.
+⬜ Eventuale autenticazione sull’API (token/JWT) per evitare che “chiunque” chiami /signals/bounce.
 
 12. Note finali
 CryptoNakCore LOMS è pensato come “cuore logico” che un domani può gestire:

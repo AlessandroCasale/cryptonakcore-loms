@@ -1,8 +1,10 @@
 # CryptoNakCore LOMS – Pre-Live Checklist MASTER (100€ semi-live)
 
-Versione aggiornata – 2025-11-30  
+Versione aggiornata – 2025-12-02  
 Basata su: `docs/PRE_LIVE_ROADMAP.md`  
-(Stato: risk base da env, `MAX_SIZE_PER_POSITION_USDT` integrato, health tool ok, `.env.sample` allineato, logging & retention mappati, checklist operative abbozzate)
+(Stato: LOMS in **PAPER-SERVER** su Hetzner (`loms-paper-shadow-2025-12-01`),
+RickyBot in **Shadow Mode** con `LOMS_ENABLED=true` su Bitget/Bybit, nessun
+ordine reale verso l’exchange)
 
 ---
 
@@ -16,10 +18,15 @@ rollback immediato.
 
 ## 1. Stato di partenza
 
-- [x] RickyBot Bounce EMA10 Strict stabile (tag pre-OMS).
+- [x] RickyBot Bounce EMA10 Strict stabile (tag pre-OMS / Tuning2).
 - [x] RickyBot runner in produzione su Hetzner in modalità “stable farm”.
-- [x] LOMS FastAPI attivo in modalità paper (ordini, posizioni, TP/SL, auto-close).
-- [x] Integrazione RickyBot → LOMS testata end-to-end (segnale reale → ordine/posizione paper).
+- [x] LOMS FastAPI attivo in modalità **paper** (ordini, posizioni, TP/SL, auto-close).
+- [x] LOMS PAPER-SERVER in esecuzione su Hetzner, profilo `ENVIRONMENT=paper`.
+- [x] Integrazione RickyBot → LOMS testata end-to-end  
+      (segnale reale → ordine/posizione paper in locale; ora Shadow Mode attiva anche su Hetzner).
+- [x] Su Hetzner, LOMS PAPER-SERVER ha già gestito almeno 2 posizioni di test
+      (BTCUSDT long/short) chiuse con TP/SL in pochi secondi, confermate via
+      `GET /positions` e `tools/print_stats.py`.
 - [x] Endpoint `/stats` funzionante + `tools/print_stats.py`.
 - [x] Endpoint `/health` funzionante + `tools/check_health.py`.
 
@@ -29,28 +36,28 @@ rollback immediato.
 
 ### 2.1 Versioning & tag
 
-- [ ] Tag LOMS paper stabile (es. `loms-paper-stable-2025-11-30`).
+- [ ] Tag LOMS paper stabile (es. `loms-paper-shadow-2025-12-01`).
 - [ ] Annotare nel README:
-  - [ ] tag RickyBot usato,
-  - [ ] tag LOMS usato,
+  - [ ] tag RickyBot usato (es. `rickybot-pre-oms-tuning2-2025-11-30`),
+  - [ ] tag LOMS usato (es. `loms-paper-shadow-2025-12-01`),
   - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
 
 ### 2.2 Config dev vs paper-server
 
-- [ ] Definire due profili LOMS (concetto spiegato nella Pre-Live Roadmap):
+- [x] Definire due profili LOMS (concetto + pratica):
 
-  - [ ] **`DEV` locale** – tipicamente:
+  - [x] **`DEV` locale** – tipicamente:
         - `ENVIRONMENT=dev`
         - `BROKER_MODE=paper`
         - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`
         - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`
         - `OMS_ENABLED=true`
 
-  - [ ] **`PAPER-SERVER` (Hetzner o altro)** – tipicamente:
+  - [x] **`PAPER-SERVER` (Hetzner)** – attualmente in uso:
         - `ENVIRONMENT=paper`
         - `BROKER_MODE=paper`
         - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db`
-          (o path assoluto sul server)
+          (profilo attivo su `rickybot-01`)
         - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`
         - `OMS_ENABLED=true`
 
@@ -63,15 +70,15 @@ rollback immediato.
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
 
-- [x] Documentare Quickstart dev nel README (uvicorn + venv).
+- [x] Documentare Quickstart dev nel README (venv + uvicorn).
 
 ### 2.3 Logging & retention
 
 - [x] Mappare dove finiscono:
   - [x] **log applicativi**
         - In DEV: output console di `uvicorn` (shell / terminale VS Code).
-        - In futuro su server: stesso output, da leggere via `tmux`, `journalctl`
-          o con redirect su file (es. `services/cryptonakcore/logs/loms_paper_app.log`).
+        - In PAPER-SERVER (Hetzner): output della sessione tmux `loms-paper`
+          che lancia `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
   - [x] **audit JSONL**
         - Path controllato da `AUDIT_LOG_PATH` in `.env`.
         - Convenzione:
@@ -98,8 +105,8 @@ rollback immediato.
       (es. `backups/2025-12-01_loms_dev.db`,
       `backups/2025-12-01_bounce_signals_dev.jsonl`),
     - riavviare `uvicorn` → LOMS ricrea DB/audit “puliti”.
-  - In PAPER-SERVER (futuro):
-    - stessa logica via SSH (stop servizio → move file → restart),
+  - In PAPER-SERVER:
+    - stessa logica via SSH (stop processo tmux → move file → restart),
     - opzionale: comprimere i backup vecchi e tenere sul server solo gli ultimi N giorni.
 
 ---
@@ -150,7 +157,7 @@ rollback immediato.
 - [x] Stats:
   - [x] `python tools/print_stats.py`
 - [x] README / roadmap con i 3 comandi base:
-  - [x] avvio uvicorn,
+  - [x] avvio `uvicorn`,
   - [x] check health,
   - [x] check stats.
 
@@ -161,8 +168,10 @@ rollback immediato.
 - [ ] **Server raggiungibile**
   - [ ] PC / server (es. Hetzner) raggiungibile via SSH / RDP.
 - [ ] **Servizio LOMS attivo**
-  - [ ] Verificare che il processo `uvicorn` sia in esecuzione  
-        (oppure avviarlo con `uvicorn services.cryptonakcore.app.main:app --reload` in DEV).
+  - [ ] Verificare che il processo `uvicorn` sia in esecuzione:
+        - in DEV: `uvicorn app.main:app --reload` da `services/cryptonakcore`;
+        - su Hetzner: sessione tmux `loms-paper` con  
+          `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
 - [ ] **Health OK**
   - [ ] Eseguire `python tools/check_health.py`.
   - [ ] Controllare che:
@@ -175,12 +184,12 @@ rollback immediato.
     - [ ] `open_positions = 0` (o comunque valore atteso),
     - [ ] nessun numero “strano” (es. PnL enormi inspiegabili).
 - [ ] **Percorsi file OK**
-  - [ ] Esiste il file DB (`loms.db`, `loms_dev.db` o `loms_paper.db` a seconda del profilo).
+  - [ ] Esiste il file DB (`loms_*.db` a seconda del profilo).
   - [ ] La cartella `services/cryptonakcore/data/` esiste.
   - [ ] Il path configurato in `AUDIT_LOG_PATH` è raggiungibile/scrivibile
         (in caso di primo avvio può non esistere ancora il file, va bene così).
 - [ ] **(Solo quando LOMS è collegato a RickyBot)**
-  - [ ] Verificare che il runner RickyBot sia in esecuzione (sessione tmux attiva).
+  - [ ] Verificare che il runner RickyBot sia in esecuzione (sessioni tmux attive).
   - [ ] Controllare dagli ultimi log che non ci siano errori gravi al bootstrap.
 
 #### 4.2.2 Post-giornata
@@ -199,7 +208,7 @@ rollback immediato.
         eventi siano sensati.
 - [ ] **Backup leggero (quando serve)**
   - [ ] Copiare il file DB (`loms_*.db`) in una cartella di backup con data
-        (es. `backups/2025-12-01_loms_dev.db`).
+        (es. `backups/2025-12-01_loms_paper.db`).
   - [ ] Facoltativo: copiare/comprimere anche il file di audit JSONL.
 - [ ] **Spegnimento ordinato (se richiesto)**
   - [ ] Se non serve tenerlo acceso H24, fermare in modo pulito:
@@ -212,12 +221,13 @@ rollback immediato.
 
 ### 5.1 Setup shadow
 
-- [ ] Avviare LOMS vicino all’ambiente reale (locale o server).
-- [ ] Configurare RickyBot dev con:
-  - [ ] parametri vicini ai futuri semi-live,
-  - [ ] `LOMS_ENABLED=true`,
-  - [ ] `BROKER_MODE=paper`.
-- [ ] Lasciare girare per N giorni (es. 5–10).
+- [x] Avviare LOMS vicino all’ambiente reale (locale o server).
+- [x] Configurare RickyBot con:
+  - [x] parametri vicini ai futuri semi-live (GAINERS_PERP 5m, Tuning2),
+  - [x] `LOMS_ENABLED=true`,
+  - [x] `BROKER_MODE=paper`.
+- [ ] Lasciare girare per N giorni (es. 5–10)  
+      _(in corso: Shadow Mode su Hetzner avviata il 2025-12-01)_.
 
 ### 5.2 Analisi Shadow
 
@@ -227,7 +237,8 @@ rollback immediato.
   - [ ] max drawdown,
   - [ ] operazioni/giorno,
   - [ ] distribuzione TP vs SL.
-- [ ] Definire soglia “ok per semi-live” (es. winrate minimo, drawdown massimo accettabile).
+- [ ] Definire soglia “ok per semi-live” (es. winrate minimo, drawdown massimo
+      accettabile).
 
 ---
 
@@ -274,7 +285,11 @@ rollback immediato.
 ## 8. Prossimi micro-step consigliati
 
 - [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
-- [ ] Definire meglio profili `DEV` vs `PAPER-SERVER`.
+- [x] Definire meglio profili `DEV` vs `PAPER-SERVER`  
+      (✅ fatto 2025-12-01, profilo PAPER-SERVER attivo su Hetzner).
 - [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine  
       (✅ fatto 2025-11-30, vedi sezione 3.1).
-- [ ] Avviare una prima Shadow Mode locale di qualche giorno.
+- [x] Avviare una prima Shadow Mode (locale + server)  
+      (✅ locale già testata; ✅ Shadow Mode su Hetzner attiva dal 2025-12-01). 
+- [ ] Lasciare girare Shadow Mode per N giorni e fare una prima review di `/stats`
+      prima di pensare al semi-live 100€.
