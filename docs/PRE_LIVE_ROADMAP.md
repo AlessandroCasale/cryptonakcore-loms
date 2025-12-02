@@ -404,3 +404,153 @@ Shadow Mode continua
 
 [🟡] Lasciare girare Shadow Mode per alcuni giorni e raccogliere /stats
 come base numerica prima di anche solo nominare il semi-live 100€.
+
+## I. Shadow Mode – 2025-12-02 first stats snapshot
+
+Fotografia del primo giro “serio” di Shadow Mode su Hetzner
+(RickyBot Tuning2 → LOMS PAPER-SERVER).
+
+### I1. Health & config
+
+Comandi eseguiti:
+
+```bash
+python tools/check_health.py
+python tools/print_stats.py
+curl -s http://127.0.0.1:8000/positions/ | python -m json.tool
+python tools/runner_status.py --max-loops 50 --show-alerts 10
+Risultato /health (riassunto):
+
+environment = "paper"
+
+broker_mode = "paper"
+
+oms_enabled = true
+
+database_url = "sqlite:///./services/cryptonakcore/data/loms_paper.db"
+
+audit_log_path = "services/cryptonakcore/data/bounce_signals_paper.jsonl"
+
+→ conferma che il profilo PAPER-SERVER è attivo e coerente.
+
+I2. Snapshot /stats (fine notte 2025-12-02)
+Output python tools/print_stats.py:
+
+Total positions: 36
+
+Open positions: 0
+
+Closed positions: 36
+
+Winning trades: 21
+
+Losing trades: 15
+
+TP count: 21
+
+SL count: 15
+
+Total PnL: 659.8853
+
+Winrate: 58.3333 %
+
+Avg PnL per trade: 18.3301
+
+Avg PnL win: 96.0799
+
+Avg PnL loss: -90.5195
+
+Osservazioni:
+
+tutte le posizioni risultano chiuse (open_positions = 0);
+
+rapporto TP/SL equilibrato (21 vs 15) con PnL totale positivo;
+
+nessuna posizione “zombie” rimasta aperta.
+
+I3. Posizioni vs alert RickyBot (consistenza Shadow Mode)
+Confronto tra:
+
+/positions (id 1–36)
+
+runner_status (python tools/runner_status.py --max-loops 50 --show-alerts 10)
+
+Gli ultimi alert nel file audit RickyBot:
+
+MOCAUSDT (short)
+
+BANKUSDT (short)
+
+PARTIUSDT (long x2)
+
+COAIUSDT (long)
+
+LAUSDT (long)
+
+GOATUSDT (long x3)
+
+CKBUSDT (long)
+
+hanno match quasi 1:1 con le ultime posizioni LOMS:
+
+BANKUSDT short → posizione created_at 2025-12-02T02:25:09
+
+PARTIUSDT long → posizioni a 2025-12-02T02:02:28 e 2025-12-02T02:05:43
+
+COAIUSDT long → posizione a 2025-12-02T02:05:40
+
+LAUSDT long → posizione a 2025-12-02T01:50:40
+
+GOATUSDT long → posizioni a 2025-12-02T01:26:28, 01:45:16, 01:45:31
+
+CKBUSDT long → posizione a 2025-12-02T00:47:23
+
+→ conferma che, per ogni alert Bounce EMA10 Strict loggato da RickyBot, viene creato
+un ordine+posizione paper in LOMS e chiuso dal MarketSimulator entro pochi secondi
+(auto_close_reason = "tp" / "sl").
+
+MOCAUSDT è l’unico alert recente non ancora visto in /positions al momento dello
+snapshot: è plausibilmente in fase di apertura/chiusura nel momento del curl,
+ma verrà catturato dai comandi successivi.
+
+I4. Stato della pipeline Shadow Mode (2025-12-02)
+Pipeline confermata operativa end-to-end:
+
+RickyBot Tuning2 genera alert Bounce EMA10 Strict
+
+watchlist ~30 simboli (GAINERS_PERP linear 5m)
+
+filtraggio CleanChart molto attivo (pochi segnali, ma puliti).
+
+notify_bounce_alert:
+
+invia il messaggio a Telegram;
+
+costruisce il payload BounceSignal;
+
+chiama POST /signals/bounce su LOMS (Shadow Mode ON).
+
+LOMS (PAPER-SERVER):
+
+accetta il segnale;
+
+passa dal check_risk_limits;
+
+crea Order + Position paper quando risk_ok = true;
+
+position_watcher chiude la posizione dopo ~7s con TP/SL.
+
+Monitoring:
+
+/positions mostra solo posizioni closed con auto_close_reason=tp/sl;
+
+/stats consolida PnL, winrate e conteggi TP/SL;
+
+tools/check_health.py e tools/print_stats.py forniscono la “foto” giornaliera;
+
+tools/runner_status.py collega watchlist, near-miss CLEAN e ultimi alert.
+
+Questa sezione va usata come baseline di riferimento per le prossime giornate
+di Shadow Mode: se in futuro cambiano Tuning, risk o configurazioni, si può
+ripetere la stessa routine e confrontare i numeri con questo snapshot del
+2025-12-02.
