@@ -1,10 +1,11 @@
 # CryptoNakCore LOMS – Pre-Live Roadmap (100€ semi-live)
 
-Versione aggiornata – 2025-12-02  
+Versione aggiornata – **2025-12-03**  
 (Stato: LOMS **PAPER-SERVER** attivo su Hetzner, `MAX_SIZE_PER_POSITION_USDT`
-integrato nel risk engine, health tool e `.env.sample` allineati, logging &
-retention mappati, Shadow Mode RickyBot→LOMS agganciata con primi trade paper
-BTCUSDT chiusi TP/SL)
+integrato nel risk engine, Real Price Engine (PriceSource + PriceMode + ExitPolicy)
+agganciato in codice, health tool e `.env.sample` allineati, logging & retention
+mappati, Shadow Mode RickyBot→LOMS agganciata con primi trade paper BTCUSDT
+chiusi TP/SL – 36 posizioni chiuse, winrate ~58%)
 
 Obiettivo: preparare la coppia **RickyBot + CryptoNakCore LOMS** a un test
 **semi-live con 100€** su Bitget, con rischio ultra-limitato e possibilità di
@@ -15,17 +16,35 @@ prima di anche solo pensarci.
 
 ---
 
-## Snapshot stato vs semi-live (2025-12-02)
+## Snapshot stato vs semi-live (2025-12-03)
 
 **✅ Già realtà (solo paper):**
 
-- LOMS in modalità **PAPER-SERVER** su Hetzner (`ENVIRONMENT=paper`, `BROKER_MODE=paper`, `OMS_ENABLED=true`).
-- Risk engine lato LOMS con **3 limiti** (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`, `MAX_SIZE_PER_POSITION_USDT`).
+- LOMS in modalità **PAPER-SERVER** su Hetzner  
+  (`ENVIRONMENT=paper`, `BROKER_MODE=paper`, `OMS_ENABLED=true`).
+- Risk engine lato LOMS con **3 limiti**  
+  (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`, `MAX_SIZE_PER_POSITION_USDT`).
 - Integrazione **RickyBot → LOMS** attiva in **Shadow Mode**:
   - ogni alert reale di Bounce EMA10 Strict viene inviato anche a LOMS (paper).
-- `/health` e `/stats` funzionanti, con tool CLI (`tools/check_health.py`, `tools/print_stats.py`).
+- `/health` e `/stats` funzionanti, con tool CLI  
+  (`tools/check_health.py`, `tools/print_stats.py`).
 - Logging & retention **mappati** (DB SQLite + audit JSONL con convenzioni per DEV e PAPER-SERVER).
 - Profili `.env` DEV vs PAPER-SERVER definiti e documentati.
+- Schema `Position` già “live-ready”  
+  (`exchange`, `market_type`, `account_label`, `external_order_id`,
+  `external_position_ref`, `exit_strategy`, `dynamic_tp_price`,
+  `dynamic_sl_price`, `max_favorable_move`, `exit_meta`).
+- Real Price Engine v1 integrato:
+  - `PriceSourceType` (simulator/exchange/replay),
+  - `PriceQuote` + `select_price(quote, mode)`,
+  - `PRICE_SOURCE` / `PRICE_MODE` in Settings,
+  - orchestrazione in `auto_close_positions` tramite `StaticTpSlPolicy` (ExitPolicy),
+  - su PAPER-SERVER attuale usiamo ancora `PRICE_SOURCE=simulator` (niente prezzi reali in produzione).
+- `BrokerAdapterPaperSim` operativo:
+  - apertura posizioni paper tramite `NewPositionParams`
+    (symbol, side, qty, entry_price, exchange, market_type, account_label,
+    tp_price, sl_price, exit_strategy="tp_sl_static"),
+  - già usato da `handle_bounce_signal` per creare `Position` da segnali Bounce.
 
 **⬜ Mancante / bloccante per il semi-live 100€:**
 
@@ -34,41 +53,50 @@ prima di anche solo pensarci.
 - Regole di **kill switch** formalizzate e documentate (BROKER_MODE, OMS_ENABLED, procedura d’emergenza).
 - Preparazione **sub-account** dedicato con 100€ e API key limitate.
 - Criteri minimi **Go / No-Go** e **piano di rollback** scritti nero su bianco.
+- Adapter exchange reali (`BrokerAdapterExchange*` + `ExchangeClient` veri) per la fase semi-live/live.
 
 ---
 
 ## A. Stato di partenza (oggi)
 
-- **RickyBot**
-  - Bounce EMA10 Strict stabile, taggato  
-    `rickybot-pre-oms-tuning2-2025-11-30`.
-  - Runner in produzione su Hetzner in modalità “stable farm” + Tuning2
-    (Bitget/Bybit PERP 5m).
-  - Dev locale separato da prod (env diversi).
-  - Integrazione LOMS lato codice già pronta (client + notifier + flag
-    `LOMS_ENABLED`, `LOMS_BASE_URL`).
-  - Su Hetzner, branch con Tuning2 + LOMS client in **Shadow Mode**:
-    ogni alert reale viene inviato anche a LOMS in modalità paper.
+### A1. RickyBot
 
-- **LOMS**
-  - Servizio FastAPI `cryptonakcore-loms` con:
-    - OMS paper completo (ordini, posizioni, TP/SL, `auto_close_positions`).
-    - Integrazione end-to-end con RickyBot dev via `notify_bounce_alert`.
-    - `/stats` + `tools/print_stats.py` funzionanti.
-    - `/health` + `tools/check_health.py` funzionanti
-      (inclusi `environment`, `broker_mode`, `oms_enabled`,
-      `DATABASE_URL`, `AUDIT_LOG_PATH`).
-  - Ambiente **DEV** locale funziona.
-  - Ambiente **PAPER-SERVER** attivo su Hetzner:
-    - `ENVIRONMENT=paper`
-    - `BROKER_MODE=paper`
-    - `OMS_ENABLED=true`
-    - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db`
-    - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`
-  - Su Hetzner sono già state aperte e chiuse almeno 2 posizioni di test
-    (BTCUSDT long/short) con TP/SL, verificate via `/positions` e
-    `tools/print_stats.py`.
-  - Tutto gira **solo in modalità paper**.
+- Bounce EMA10 Strict stabile, taggato  
+  `rickybot-pre-oms-tuning2-2025-11-30`.
+- Runner in produzione su Hetzner in modalità “stable farm” + Tuning2  
+  (Bitget/Bybit PERP 5m).
+- Dev locale separato da prod (env diversi).
+- Integrazione LOMS lato codice pronta:
+  - client HTTP `loms_client.py`,
+  - `notify_bounce_alert` che manda sia Telegram che LOMS,
+  - flag `LOMS_ENABLED`, `LOMS_BASE_URL`.
+- Su Hetzner, branch con Tuning2 + LOMS client in **Shadow Mode**:
+  ogni alert reale viene inviato anche a LOMS in modalità paper.
+
+### A2. LOMS
+
+- Servizio FastAPI `cryptonakcore-loms` con:
+  - OMS paper completo (ordini, posizioni, TP/SL, `auto_close_positions`).
+  - Real Price Engine v1 integrato (PriceSource + PriceMode + ExitPolicy),
+    usato in dev con DummyExchange, ma su server PAPER-SERVER ancora in
+    modalità `PRICE_SOURCE=simulator`.
+  - `/stats` + `tools/print_stats.py` funzionanti.
+  - `/health` + `tools/check_health.py` funzionanti
+    (inclusi `environment`, `broker_mode`, `oms_enabled`,
+    `DATABASE_URL`, `AUDIT_LOG_PATH` e, in dev, i campi prezzo).
+- Ambiente **DEV** locale funziona.
+- Ambiente **PAPER-SERVER** attivo su Hetzner:
+  - `ENVIRONMENT=paper`
+  - `BROKER_MODE=paper`
+  - `OMS_ENABLED=true`
+  - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db`
+  - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`
+  - `PRICE_SOURCE=simulator`
+  - `PRICE_MODE=last`
+- Su Hetzner sono già state aperte e chiuse almeno 36 posizioni di test
+  (es. BTCUSDT + altri simboli) con TP/SL, verificate via `/positions` e
+  `tools/print_stats.py`.
+- Tutto gira **solo in modalità paper** (nessun ordine reale).
 
 ---
 
@@ -80,7 +108,7 @@ prima di anche solo pensarci.
 ### B1. Versioning & tag
 
 - [ ] Taggare una versione paper stabile di LOMS  
-      _(nome tag deciso: `loms-paper-shadow-2025-12-01`, da creare quando il repo è pulito)_.
+      _(nome tag proposto: `loms-paper-shadow-2025-12-01`, da creare quando il repo è pulito)_.
 - [ ] Annotare nel README:
   - [ ] tag RickyBot usato,
   - [ ] tag LOMS usato,
@@ -97,26 +125,33 @@ prima di anche solo pensarci.
     - `BROKER_MODE=paper`  
     - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`  
     - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`  
-    - `OMS_ENABLED=true`
+    - `OMS_ENABLED=true`  
+    - `PRICE_SOURCE=exchange` (per test con DummyExchange in locale)  
+    - `PRICE_MODE=last`
 
   - **`PAPER-SERVER` (Hetzner)** – **profilo attuale**
     - `ENVIRONMENT=paper`  
     - `BROKER_MODE=paper`  
     - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db`  
     - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`  
-    - `OMS_ENABLED=true`
+    - `OMS_ENABLED=true`  
+    - `PRICE_SOURCE=simulator`  
+    - `PRICE_MODE=last`
 
 - [x] Aggiungere a `services/cryptonakcore/.env.sample` i campi minimi  
-      *(✅ fatto 2025-11-30)*:
+      *(✅ fatto 2025-11-30 + Real Price 2025-12-03)*:
   - [x] `ENVIRONMENT=dev|paper|live`
   - [x] `DATABASE_URL`
   - [x] `AUDIT_LOG_PATH`
   - [x] `OMS_ENABLED`
-  - [x] limiti rischio base (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`,
+  - [x] limiti rischio base
+        (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`,
         `MAX_SIZE_PER_POSITION_USDT`)
+  - [x] `PRICE_SOURCE`
+  - [x] `PRICE_MODE`
 
 - [x] Documentare nel README come lanciare in dev (venv + uvicorn, sezione Quickstart)  
-      *(profilo server dettagliato in LOMS_CHECKLIST + runbook Hetzner)*.
+  *(profilo server dettagliato in LOMS_CHECKLIST + runbook Hetzner).*
 
 ---
 
@@ -196,6 +231,8 @@ prima di anche solo pensarci.
   - [x] `BROKER_MODE=paper|live`  
         (per ora resta sempre `paper`; flag letto da `Settings`
         ed esposto in `/health` → visibile con `tools/check_health.py`).
+- [x] Usare `OMS_ENABLED` come kill-switch logico  
+      (se `false` → `/signals/bounce` non crea ordini/posizioni).
 - [ ] Definire una regola chiara: se `BROKER_MODE=paper` → **nessun** ordine verso exchange
       reale anche in futuro (anche quando esisterà un adapter reale).
 - [ ] Documentare una procedura di emergenza:
@@ -208,8 +245,8 @@ prima di anche solo pensarci.
 ## D. Fase 3 – Monitoraggio operativo
 
 > Obiettivo: poter vedere rapidamente se “tutto va bene” senza aprire mille file.  
-> (Per la routine giornaliera completa vedi anche `LOMS_CHECKLIST_MASTER`, sezione
-> **Daily Ops / Shadow Mode**).
+> (Per la routine giornaliera completa vedi anche `LOMS_CHECKLIST_MASTER`,
+> sezione **Daily Ops / Shadow Mode**.)
 
 ### D1. Strumenti minimi
 
@@ -217,7 +254,8 @@ prima di anche solo pensarci.
   - [x] `python tools/print_stats.py`
 - [x] Script per health:
   - [x] `python tools/check_health.py` → chiama `/health` e stampa stato
-        (inclusi `environment` e `broker_mode`).
+        (inclusi `environment`, `broker_mode`, `oms_enabled`,
+        e – in dev – info su DB/audit e PriceSource).
 - [x] Mini guida nel README / checklist con 3 comandi “di controllo”:
   - [x] avvio `uvicorn` in dev,
   - [x] check health,
@@ -251,11 +289,13 @@ server/PC raggiungibile,
 
 processo uvicorn attivo (o avviato),
 
-python tools/check_health.py → status=ok, environment e broker_mode attesi,
+python tools/check_health.py → status=ok, environment/broker_mode attesi,
 
 python tools/print_stats.py → numeri coerenti (es. open_positions=0),
 
-path DB e audit esistenti/scrivibili.
+path DB e audit esistenti/scrivibili,
+
+se collegato a RickyBot: sessioni tmux bot attive e log puliti al bootstrap.
 
 Post-giornata
 
@@ -268,8 +308,8 @@ controllo rapido errori nei log,
 eventuale copia DB/audit in backups/ se serve “tagliare” la storia.
 
 E. Fase 4 – Shadow Mode (raccomandata prima del 100€)
-Shadow Mode = stesso flusso di segnali, ma solo paper, mentre eventualmente
-fai ancora trading manuale per confronto.
+Shadow Mode = stesso flusso di segnali di domani, ma ordini solo paper,
+mentre eventualmente fai ancora trading manuale per confronto.
 
 E1. Setup shadow
  Avviare LOMS su una macchina “vicina” all’ambiente reale (Hetzner rickybot-01).
@@ -277,7 +317,7 @@ E1. Setup shadow
 
  Configurare RickyBot con:
 
- parametri il più possibile vicini a quelli del futuro semi-live
+ parametri vicini ai futuri semi-live
 (Bitget/Bybit PERP 5m, Tuning2),
 
  LOMS_ENABLED=true,
@@ -380,14 +420,14 @@ Tag LOMS paper + doc allineata
 
  Creare il tag git loms-paper-shadow-2025-12-01 (o nome equivalente).
 
-✅ LOMS_CHECKLIST_MASTER e questa Pre-Live Roadmap sono già aggiornate
-allo stato PAPER-SERVER + Shadow Mode.
+ LOMS_CHECKLIST_MASTER e questa Pre-Live Roadmap sono già aggiornate
+allo stato PAPER-SERVER + Shadow Mode + Real Price Engine integrato.
 
 Rifinire i profili DEV vs PAPER-SERVER
 
-✅ Profili reali di .env per PC locale e server definiti e testati.
+ Profili reali di .env per PC locale e server definiti e testati.
 
-✅ Documentazione aggiornata (README + LOMS_CHECKLIST_MASTER).
+ Documentazione aggiornata (README + LOMS_CHECKLIST_MASTER).
 
 Parametri risk lato RickyBot (C2)
 
@@ -398,28 +438,27 @@ senza bloccare nulla.
 
 Shadow Mode continua
 
-✅ Shadow Mode locale già testata (RickyBot dev → LOMS dev).
+ Shadow Mode locale già testata (RickyBot dev → LOMS dev).
 
-✅ Shadow Mode su Hetzner attiva (RickyBot prod → LOMS PAPER-SERVER).
+ Shadow Mode su Hetzner attiva (RickyBot prod → LOMS PAPER-SERVER).
 
 [🟡] Lasciare girare Shadow Mode per alcuni giorni e raccogliere /stats
 come base numerica prima di anche solo nominare il semi-live 100€.
 
-## I. Shadow Mode – 2025-12-02 first stats snapshot
-
+I. Shadow Mode – Snapshot iniziale (2025-12-02)
 Fotografia del primo giro “serio” di Shadow Mode su Hetzner
 (RickyBot Tuning2 → LOMS PAPER-SERVER).
 
-### I1. Health & config
-
+I1. Health & config
 Comandi eseguiti:
 
-```bash
+bash
+Copia codice
 python tools/check_health.py
 python tools/print_stats.py
 curl -s http://127.0.0.1:8000/positions/ | python -m json.tool
 python tools/runner_status.py --max-loops 50 --show-alerts 10
-Risultato /health (riassunto):
+Riassunto /health:
 
 environment = "paper"
 
@@ -493,17 +532,17 @@ CKBUSDT (long)
 
 hanno match quasi 1:1 con le ultime posizioni LOMS:
 
-BANKUSDT short → posizione created_at 2025-12-02T02:25:09
+BANKUSDT short → posizione created_at = 2025-12-02T02:25:09
 
-PARTIUSDT long → posizioni a 2025-12-02T02:02:28 e 2025-12-02T02:05:43
+PARTIUSDT long → posizioni 2025-12-02T02:02:28 e 2025-12-02T02:05:43
 
-COAIUSDT long → posizione a 2025-12-02T02:05:40
+COAIUSDT long → posizione 2025-12-02T02:05:40
 
-LAUSDT long → posizione a 2025-12-02T01:50:40
+LAUSDT long → posizione 2025-12-02T01:50:40
 
-GOATUSDT long → posizioni a 2025-12-02T01:26:28, 01:45:16, 01:45:31
+GOATUSDT long → posizioni 2025-12-02T01:26:28, 01:45:16, 01:45:31
 
-CKBUSDT long → posizione a 2025-12-02T00:47:23
+CKBUSDT long → posizione 2025-12-02T00:47:23
 
 → conferma che, per ogni alert Bounce EMA10 Strict loggato da RickyBot, viene creato
 un ordine+posizione paper in LOMS e chiuso dal MarketSimulator entro pochi secondi
@@ -524,29 +563,30 @@ filtraggio CleanChart molto attivo (pochi segnali, ma puliti).
 
 notify_bounce_alert:
 
-invia il messaggio a Telegram;
+invia il messaggio a Telegram,
 
-costruisce il payload BounceSignal;
+costruisce il payload BounceSignal,
 
 chiama POST /signals/bounce su LOMS (Shadow Mode ON).
 
 LOMS (PAPER-SERVER):
 
-accetta il segnale;
+accetta il segnale,
 
-passa dal check_risk_limits;
+passa dal check_risk_limits,
 
-crea Order + Position paper quando risk_ok = true;
+crea Order + Position paper quando risk_ok = true via BrokerAdapterPaperSim,
 
-position_watcher chiude la posizione dopo ~7s con TP/SL.
+position_watcher (auto_close_positions) chiude la posizione dopo ~7s
+con TP/SL deciso dalla policy statica.
 
 Monitoring:
 
-/positions mostra solo posizioni closed con auto_close_reason=tp/sl;
+/positions mostra solo posizioni closed con auto_close_reason = "tp" / "sl",
 
-/stats consolida PnL, winrate e conteggi TP/SL;
+/stats consolida PnL, winrate e conteggi TP/SL,
 
-tools/check_health.py e tools/print_stats.py forniscono la “foto” giornaliera;
+tools/check_health.py e tools/print_stats.py danno la “foto” giornaliera,
 
 tools/runner_status.py collega watchlist, near-miss CLEAN e ultimi alert.
 

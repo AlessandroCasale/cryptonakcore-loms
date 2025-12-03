@@ -4,17 +4,26 @@
 FastAPI microservice che funge da **OMS** (Order Management System) in modalità **paper**  
 (per il momento niente ordini reali) a supporto del trading bot **RickyBot**.
 
-Stato attuale (2025-12-02):
+Stato attuale (**2025-12-02**):
 
 - LOMS gira in **DEV** sul PC locale.
 - LOMS gira in **PAPER-SERVER** su Hetzner (`rickybot-01`) accanto a RickyBot.
 - RickyBot → LOMS è collegato in **Shadow Mode**: gli alert reali del bot generano
   **Order + Position paper** in LOMS, con TP/SL simulati e PnL esposto via API.
+- Il risk engine LOMS usa **3 limiti** letti da env:
+  `MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`,
+  `MAX_SIZE_PER_POSITION_USDT`.
 
 L’idea:
 
 > RickyBot genera un segnale → LOMS lo riceve → valida rischio → crea **Order + Position paper**  
 > → simula TP/SL con un **MarketSimulator** → espone PnL, stats e storico via API.
+
+Per la parte “pre-live 100€” vedi anche:
+
+- `docs/LOMS_CHECKLIST_MASTER.md`
+- `docs/PRE_LIVE_ROADMAP.md`
+- `docs/PRE_LIVE_CHECKLIST_MASTER.md`
 
 ---
 
@@ -38,13 +47,13 @@ L’idea:
 - 🔜 In futuro:
   - engine rischio più avanzato,
   - integrazione con broker reali (Bitget/Bybit),
-  - modalità “semi-live 100€” per RickyBot.
+  - modalità **“semi-live 100€”** per RickyBot.
 
 ---
 
 ## 2. Architettura in breve
 
-Repo (semplificata):
+Struttura (semplificata):
 
 ```text
 cryptonakcore-loms/
@@ -58,7 +67,9 @@ cryptonakcore-loms/
 │       └── app/
 │           ├── main.py              # FastAPI app, include tutte le route + startup scheduler
 │           ├── core/
-│           │   └── config.py        # Settings (ENVIRONMENT, OMS_ENABLED, BROKER_MODE, risk, ecc.)
+│           │   ├── config.py        # Settings (ENVIRONMENT, OMS_ENABLED, BROKER_MODE, risk, ecc.)
+│           │   ├── logging.py       # setup logging (JSON, ecc.)
+│           │   └── scheduler.py     # loop position_watcher / auto_close_positions
 │           ├── db/
 │           │   ├── session.py       # SessionLocal + Base
 │           │   └── models.py        # Order, Position
@@ -81,7 +92,7 @@ cryptonakcore-loms/
 │
 ├── docs/
 │   ├── LOMS_CHECKLIST_MASTER.md     # Jira-style checklist LOMS
-│   ├── PRE_LIVE_ROADMAP.md         # Roadmap pre-live 100€
+│   ├── PRE_LIVE_ROADMAP.md          # Roadmap pre-live 100€
 │   └── PRE_LIVE_CHECKLIST_MASTER.md
 │
 ├── services/cryptonakcore/.env.sample
@@ -135,7 +146,7 @@ Swagger UI → http://127.0.0.1:8000/docs
 ReDoc → http://127.0.0.1:8000/redoc
 
 3.4 Comandi rapidi di controllo (dev locale)
-Dopo aver avviato il server in locale, hai tre comandi veloci per verificare che tutto sia ok:
+Dopo aver avviato il server in locale, hai tre comandi veloci per verificare che tutto sia ok (dalla root del repo):
 
 Health check del servizio
 
@@ -162,9 +173,9 @@ bash
 Copia codice
 tail -f services/cryptonakcore/data/bounce_signals_dev.jsonl
 4. API principali (overview)
-Più in dettaglio lo vedi da /docs, qui la mappa mentale:
+Più in dettaglio lo vedi da /docs. Qui la mappa mentale:
 
-GET /health
+4.1 GET /health
 Ritorna lo stato base del servizio, ad esempio:
 
 json
@@ -181,30 +192,32 @@ Copia codice
 }
 Serve per:
 
-vedere se il servizio risponde,
+vedere se il servizio risponde;
 
-leggere environment (dev, paper, in futuro live),
+leggere environment (dev, paper, in futuro live);
 
-leggere broker_mode (paper vs live),
+leggere broker_mode (paper vs live);
 
 sapere quale DB e quale audit JSONL sta usando.
 
-POST /signals/bounce
+4.2 POST /signals/bounce
 Endpoint principale chiamato da RickyBot per ogni segnale Bounce.
 
-GET /orders
+4.3 GET /orders
 Elenco ordini registrati nel DB (paper).
 
-GET /positions
+4.4 GET /positions
 Elenco posizioni (aperte + chiuse) con dettagli PnL, TP/SL, auto_close_reason.
 
-POST /positions/...
-Endpoint per chiusura manuale di una posizione (vedi docs in /docs → tag positions).
+4.5 POST /positions/{id}/close
+Endpoint per chiusura manuale di una posizione
+(vedi docs in /docs → tag positions).
 
-GET /market (+ eventuali sottoroute)
-Lettura/gestione prezzi nel MarketSimulator (usato da auto_close_positions per TP/SL).
+4.6 GET /market (+ eventuali sottoroute)
+Lettura/gestione prezzi nel MarketSimulator
+(usato da auto_close_positions per TP/SL).
 
-GET /stats
+4.7 GET /stats
 Statistiche aggregate:
 
 PnL totale,
@@ -316,13 +329,13 @@ oms_enabled (bool) – stato della config (OMS_ENABLED).
 
 risk_ok (bool) – il segnale ha passato i controlli base di rischio.
 
-order_id (int | null) – ID ordine creato (se OMS abilitato & risk_ok).
+order_id (int | null) – ID ordine creato (se OMS_ENABLED & risk_ok).
 
 position_id (int | null) – ID posizione creata.
 
 tp_price / sl_price (float | null) – livelli prezzo usati per TP/SL.
 
-risk_reason (str, opzionale) – motivo del blocco, se risk_ok = False.
+risk_reason (str, opzionale) – motivo del blocco, se risk_ok = false.
 
 6. Posizioni, ordini e stats
 6.1 Modello Order
@@ -434,10 +447,10 @@ MAX_OPEN_POSITIONS_PER_SYMBOL=2
 MAX_SIZE_PER_POSITION_USDT=10.0
 Comportamento di OMS_ENABLED:
 
-False → il servizio riceve i segnali, li logga, ma non crea ordini/posizioni.
+false → il servizio riceve i segnali, li logga, ma non crea ordini/posizioni.
 Utile per testare il wiring senza toccare il DB.
 
-True → ad ogni POST /signals/bounce valido viene creato Order + Position in paper
+true → ad ogni POST /signals/bounce valido viene creato Order + Position in paper
 (se i controlli di rischio non bloccano).
 
 8. Profili ambiente: DEV vs PAPER-SERVER
@@ -446,14 +459,13 @@ Per ora LOMS gira solo in modalità paper, ma è utile distinguere due profili:
 8.1 DEV (locale)
 Ambiente sul tuo PC per sviluppare e testare:
 
+env
+Copia codice
 ENVIRONMENT=dev
-
 BROKER_MODE=paper
-
 DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db
-
 AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl
-
+OMS_ENABLED=true
 Flow tipico:
 
 bash
@@ -472,16 +484,13 @@ python tools/print_stats.py
 8.2 PAPER-SERVER (Hetzner / server remoto)
 Ambiente su server remoto, sempre in paper:
 
+env
+Copia codice
 ENVIRONMENT=paper
-
 BROKER_MODE=paper
-
 DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_paper.db
-
 AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl
-
 OMS_ENABLED=true
-
 Idea operativa su Hetzner:
 
 repo clonata in /root/cryptonakcore-loms,
@@ -505,7 +514,7 @@ PAPER-SERVER su Hetzner usato in Shadow Mode con RickyBot (solo paper).
 
 9. Checklist operativa (solo paper)
 Questa checklist è pensata per l’uso in modalità paper (sia in DEV che in profilo
-PAPER-SERVER).
+PAPER-SERVER). Per la versione “completa” vedi anche LOMS_CHECKLIST_MASTER.
 
 9.1 Prima di avviare tutto (pre-apertura)
 Attiva l’ambiente virtuale (sulla macchina dove gira LOMS):
@@ -524,9 +533,7 @@ cd services/cryptonakcore
 uvicorn app.main:app --reload
 (su server: stesso comando ma lanciato in tmux, es. sessione loms-paper).
 
-Controlla che il servizio risponda (health):
-
-Dalla root del repo:
+Controlla che il servizio risponda (health) – dalla root del repo:
 
 bash
 Copia codice
@@ -615,9 +622,9 @@ loms_enabled ← (LOMS_ENABLED in .env di RickyBot),
 
 loms_base_url ← (LOMS_BASE_URL in .env di RickyBot),
 
-se loms_enabled=False → non chiama il servizio (logga un evento loms_skip).
+se loms_enabled = False → non chiama il servizio (logga un evento loms_skip),
 
-se loms_enabled=True e loms_base_url è configurato → invia un POST /signals/bounce.
+se loms_enabled = True e loms_base_url è configurato → invia un POST /signals/bounce.
 
 Esempio .env lato RickyBot (solo per capire il wiring, NON è parte di questo repo):
 
@@ -694,9 +701,9 @@ testata in locale,
 
 collegata in Shadow Mode su Hetzner,
 
-primi trade paper BTCUSDT (long/short) chiusi con TP/SL visti su /positions e /stats.
+primi trade paper (es. BTCUSDT long/short) chiusi con TP/SL visti su /positions e /stats.
 
-Prossimi passi (idea, non vincolante):
+Prossimi passi (idea, non vincolante – vedi anche PRE_LIVE_ROADMAP):
 
 🟡 Migliorare il risk engine:
 
@@ -739,6 +746,6 @@ guarda /positions e /stats,
 
 e poi decidi se la prossima cosa da fare è:
 
-migliorare i controlli di rischio,
+migliorare i controlli di rischio, oppure
 
-o iniziare a preparare il broker reale per la fase “semi-live 100€”. 💡
+iniziare a preparare il broker reale per la fase “semi-live 100€”. 💡

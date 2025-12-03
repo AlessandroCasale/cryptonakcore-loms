@@ -1,26 +1,28 @@
-# services/cryptonakcore/app/api/health.py
-
 from fastapi import APIRouter
+
 from app.core.config import settings
 
 router = APIRouter()
 
 
 @router.get("/health")
-async def health():
+def health():
     """
-    Endpoint di health check minimale.
+    Endpoint di health-check per CryptoNakCore LOMS.
 
-    Usato da tools/check_health.py per verificare che il servizio
-    sia su e risponda con uno stato semplice.
+    Ritorna info base di configurazione utili per capire
+    in che modalità sta girando il servizio.
     """
     return {
         "ok": True,
         "service": "CryptoNakCore LOMS",
         "status": "ok",
-        "environment": settings.ENVIRONMENT,
-        "broker_mode": settings.BROKER_MODE,
-        "oms_enabled": settings.OMS_ENABLED,
+        "environment": settings.environment,
+        "broker_mode": settings.broker_mode,
+        "oms_enabled": settings.oms_enabled,
         "database_url": settings.DATABASE_URL,
         "audit_log_path": settings.AUDIT_LOG_PATH,
+        # Real Price Engine (nuovi campi)
+        "price_source": settings.price_source.value,
+        "price_mode": settings.price_mode.value,
     }

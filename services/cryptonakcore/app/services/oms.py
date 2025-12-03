@@ -1,12 +1,30 @@
 from datetime import datetime
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from sqlalchemy.orm import Session
 
 from app.db.models import Position
 from app.services.market_simulator import MarketSimulator
 from app.core.config import settings
+from app.services.pricing import (
+    PriceSourceType,
+    SimulatedPriceSource,
+    select_price,
+)
+from app.services.exit_engine import (
+    StaticTpSlPolicy,
+    ExitContext,
+    ExitActionType,
+)
+from app.services.exchange_client import (
+    ExchangePriceSource,
+    get_default_exchange_client,
+)
+from app.services.broker_adapter import (
+    BrokerAdapterPaperSim,
+    NewPositionParams,
+)
 
 logger = logging.getLogger("oms")
 
@@ -23,6 +41,49 @@ def _normalize_side(side: str) -> str:
     if s in ("sell", "short"):
         return "short"
     return s
+
+
+def _get_price_source():
+    """
+    Risolve la sorgente prezzi da usare a runtime.
+
+    - simulator: usa MarketSimulator incapsulato in SimulatedPriceSource
+    - exchange:  usa ExchangePriceSource con il client di default (per ora dummy)
+    - altri valori: warning + fallback al simulatore
+    """
+
+    source = settings.price_source
+
+    if source == PriceSourceType.SIMULATOR:
+        return SimulatedPriceSource(MarketSimulator)
+
+    if source == PriceSourceType.EXCHANGE:
+        client = get_default_exchange_client()
+        return ExchangePriceSource(client)
+
+    # Config non ancora supportata → fallback al simulatore
+    logger.warning(
+        {
+            "event": "price_source_fallback_to_simulator",
+            "configured_source": str(source),
+        }
+    )
+    return SimulatedPriceSource(MarketSimulator)
+
+
+def _get_broker_adapter() -> BrokerAdapterPaperSim:
+    """
+    Risolve il BrokerAdapter da usare a runtime.
+
+    Per ora:
+    - BROKER_MODE=paper -> BrokerAdapterPaperSim (gestione Position in DB)
+
+    In futuro:
+    - potremo aggiungere adapter diversi per SHADOW / LIVE e fare uno switch
+      in base a settings.broker_mode / profilo di rischio.
+    """
+    # In questa fase abbiamo solo il profilo paper.
+    return BrokerAdapterPaperSim()
 
 
 def check_risk_limits(
@@ -122,15 +183,181 @@ def check_risk_limits(
     return True, None
 
 
+def handle_bounce_signal(db: Session, signal) -> dict:
+    """
+    Gestisce un segnale Bounce:
+
+    - se OMS_ENABLED = False → ack ma non apre nulla
+    - applica il risk engine
+    - costruisce i parametri posizione
+    - apre la posizione via BrokerAdapterPaperSim
+    - restituisce info su posizione aperta (per ora order_id=None)
+    """
+
+    symbol = signal.symbol
+    side_in = signal.side
+    price = float(signal.price)
+
+    # OMS disabilitato → solo ack
+    if not settings.OMS_ENABLED:
+        logger.info(
+            {
+                "event": "bounce_signal_ignored_oms_disabled",
+                "symbol": symbol,
+                "side": side_in,
+                "price": price,
+            }
+        )
+        return {
+            "received": True,
+            "oms_enabled": False,
+        }
+
+    side = _normalize_side(side_in)
+    qty = 1.0  # TODO: parametrizzare in futuro
+
+    # Risk check
+    risk_ok, risk_reason = check_risk_limits(
+        db,
+        symbol=symbol,
+        entry_price=price,
+        qty=qty,
+    )
+    if not risk_ok:
+        logger.info(
+            {
+                "event": "bounce_signal_risk_block",
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "reason": risk_reason,
+            }
+        )
+        return {
+            "received": True,
+            "oms_enabled": True,
+            "risk_ok": False,
+            "risk_reason": risk_reason,
+        }
+
+    # TP/SL da settings (stessa logica di prima)
+    tp_pct = float(getattr(settings, "TP_PCT", 0.0) or 0.0)
+    sl_pct = float(getattr(settings, "SL_PCT", 0.0) or 0.0)
+
+    if side == "long":
+        tp_price = price * (1.0 + tp_pct / 100.0) if tp_pct > 0 else None
+        sl_price = price * (1.0 - sl_pct / 100.0) if sl_pct > 0 else None
+    elif side == "short":
+        tp_price = price * (1.0 - tp_pct / 100.0) if tp_pct > 0 else None
+        sl_price = price * (1.0 + sl_pct / 100.0) if sl_pct > 0 else None
+    else:
+        # side non valido → non apriamo
+        reason = f"invalid_side: {side_in}"
+        logger.error(
+            {
+                "event": "bounce_signal_invalid_side",
+                "symbol": symbol,
+                "side": side_in,
+                "price": price,
+            }
+        )
+        return {
+            "received": True,
+            "oms_enabled": True,
+            "risk_ok": False,
+            "risk_reason": reason,
+        }
+
+    # Parametri "profilo LAB dev" (come negli altri test)
+    exchange = getattr(signal, "exchange", None) or "bitget"
+    market_type = "paper_sim"
+    account_label = "lab_dev"
+
+    adapter = _get_broker_adapter()
+
+    params = NewPositionParams(
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        entry_price=price,
+        exchange=exchange,
+        market_type=market_type,
+        account_label=account_label,
+        tp_price=tp_price,
+        sl_price=sl_price,
+    )
+
+    result = adapter.open_position(db, params)
+
+    if not result.ok or result.position is None:
+        logger.error(
+            {
+                "event": "bounce_signal_open_failed",
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "reason": result.reason,
+            }
+        )
+        return {
+            "received": True,
+            "oms_enabled": True,
+            "risk_ok": True,
+            "open_ok": False,
+            "reason": result.reason or "broker_open_failed",
+        }
+
+    pos = result.position
+
+    logger.info(
+        {
+            "event": "bounce_signal_position_opened",
+            "symbol": symbol,
+            "side": side,
+            "price": price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+            "pos_id": pos.id,
+            "exchange": pos.exchange,
+            "market_type": pos.market_type,
+            "account_label": pos.account_label,
+        }
+    )
+
+    # Nota: order_id per ora None (non abbiamo ancora adattato il modello Order)
+    return {
+        "received": True,
+        "oms_enabled": True,
+        "risk_ok": True,
+        "order_id": None,
+        "position_id": pos.id,
+        "tp_price": pos.tp_price,
+        "sl_price": pos.sl_price,
+        "exit_strategy": pos.exit_strategy,
+    }
+
+
 def auto_close_positions(db: Session) -> None:
     """
     Controlla tutte le posizioni aperte e le chiude in modalità paper
-    quando il prezzo simulato raggiunge TP (tp_price) o SL (sl_price).
+    quando il prezzo raggiunge TP (tp_price) o SL (sl_price).
     Le posizioni più giovani di 7 secondi NON vengono chiuse.
+
+    Orchestrazione:
+    - legge il prezzo tramite PriceSource (simulator/exchange)
+    - valuta la posizione con StaticTpSlPolicy (ExitPolicy)
+    - applica le ExitAction di tipo CLOSE_POSITION aggiornando la Position
     """
 
     open_positions = db.query(Position).filter(Position.status == "open").all()
     now = datetime.utcnow()  # momento attuale, usato per calcolare l'età
+
+    # Sorgente prezzi e modalità (last/bid/ask/...)
+    price_source = _get_price_source()
+    price_mode = settings.price_mode
+
+    # Exit policy attuale (TP/SL statici)
+    policy = StaticTpSlPolicy()
 
     for pos in open_positions:
         # ⏱️ NON chiudere posizioni create da meno di 7 secondi
@@ -143,36 +370,37 @@ def auto_close_positions(db: Session) -> None:
         if pos.tp_price is None and pos.sl_price is None:
             continue
 
-        # Prezzo corrente dal market simulator
-        price = MarketSimulator.get_price(pos.symbol)
-        current_price = float(price)
+        # Recupero prezzo & valutazione policy con hardening errori
+        try:
+            quote = price_source.get_quote(pos.symbol)
+            current_price = float(select_price(quote, price_mode))
 
-        # Converte TP/SL in float se presenti
-        tp: Optional[float] = float(pos.tp_price) if pos.tp_price is not None else None
-        sl: Optional[float] = float(pos.sl_price) if pos.sl_price is not None else None
-
-        side = _normalize_side(pos.side)
-
-        hit_tp = False
-        hit_sl = False
-
-        if tp is not None:
-            if side == "long":
-                hit_tp = current_price >= tp
-            elif side == "short":
-                hit_tp = current_price <= tp
-
-        if sl is not None:
-            if side == "long":
-                hit_sl = current_price <= sl
-            elif side == "short":
-                hit_sl = current_price >= sl
-
-        # Nessun trigger → continua
-        if not (hit_tp or hit_sl):
+            # Costruiamo il contesto per la policy
+            ctx = ExitContext(price=current_price, quote=quote, now=now)
+            actions = policy.on_new_price(pos, ctx)
+        except Exception as e:
+            logger.error(
+                {
+                    "event": "exit_engine_error",
+                    "symbol": pos.symbol,
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                }
+            )
+            # Non chiude il watcher: salta solo questa posizione
             continue
 
-        reason = "tp" if hit_tp else "sl"
+        # Filtriamo solo le azioni di chiusura completa
+        close_actions: List = [
+            a for a in actions if a.type == ExitActionType.CLOSE_POSITION
+        ]
+
+        # Nessuna azione di chiusura → continua
+        if not close_actions:
+            continue
+
+        action = close_actions[0]
+        reason = action.close_reason or "tp_sl"
 
         # ✅ NIENTE Order di chiusura per ora, aggiorniamo solo la Position
         pos.status = "closed"
@@ -180,10 +408,11 @@ def auto_close_positions(db: Session) -> None:
         pos.close_price = current_price
         pos.auto_close_reason = reason
 
-        # Calcolo PnL
+        # Calcolo PnL (stessa logica di prima)
         entry = float(pos.entry_price)
         qty = float(pos.qty)
 
+        side = _normalize_side(pos.side)
         if side == "long":
             pos.pnl = (current_price - entry) * qty
         else:  # short

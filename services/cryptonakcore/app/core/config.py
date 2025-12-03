@@ -2,6 +2,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings  # per Pydantic v2
 
+from app.services.pricing import PriceSourceType, PriceMode
+
 
 # BASE_DIR = root del servizio cryptonakcore (dove ci sono app/, data/, ecc.)
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -29,6 +31,14 @@ class Settings(BaseSettings):
     # file dove salviamo i segnali di bounce in formato JSON Lines
     AUDIT_LOG_PATH: str = str(BASE_DIR / "data" / "bounce_signals.jsonl")
 
+    # -----------------------------
+    # Real Price Engine (PriceSource)
+    # -----------------------------
+    # Da dove arrivano i prezzi: simulator | exchange | replay
+    PRICE_SOURCE: PriceSourceType = PriceSourceType.SIMULATOR
+    # Quale campo del quote usare: last | bid | ask | mid | mark
+    PRICE_MODE: PriceMode = PriceMode.LAST
+
     class Config:
         env_file = ".env"
 
@@ -44,6 +54,16 @@ class Settings(BaseSettings):
     @property
     def oms_enabled(self) -> bool:
         return self.OMS_ENABLED
+
+    @property
+    def price_source(self) -> PriceSourceType:
+        """Alias lower-case per l'uso interno /health ecc."""
+        return self.PRICE_SOURCE
+
+    @property
+    def price_mode(self) -> PriceMode:
+        """Alias lower-case per l'uso interno /health ecc."""
+        return self.PRICE_MODE
 
 
 settings = Settings()

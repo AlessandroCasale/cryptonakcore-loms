@@ -20,6 +20,10 @@ DEFAULT_TP_PCT = 4.5
 DEFAULT_SL_PCT = 1.5
 DEFAULT_QTY = 1.0
 
+# Default “lab” per i nuovi campi live-ready
+DEFAULT_MARKET_TYPE = "paper_sim"  # in futuro: "linear_perp", ecc.
+DEFAULT_ACCOUNT_LABEL = "lab_dev"  # in futuro: "semi_live_100eur", ecc.
+
 
 class BounceSignal(BaseModel):
     symbol: str
@@ -158,8 +162,7 @@ async def receive_bounce_signal(
         tp_price = entry_price * (1.0 - tp_pct / 100.0)
         sl_price = entry_price * (1.0 + sl_pct / 100.0) if sl_pct is not None else None
     else:
-        # Questo blocco dovrebbe essere teoricamente irraggiungibile perché filtriamo sopra,
-        # ma lo lasciamo per sicurezza.
+        # Difesa extra (vedi commento sopra)
         logger.info(
             {
                 "event": "bounce_invalid_side_post_tp_sl",
@@ -188,7 +191,7 @@ async def receive_bounce_signal(
     db.commit()
     db.refresh(db_order)
 
-    # 7) Crea posizione paper associata
+    # 7) Crea posizione paper associata (live-ready fields inclusi)
     db_position = PositionModel(
         symbol=signal.symbol,
         side=side,
@@ -197,6 +200,10 @@ async def receive_bounce_signal(
         tp_price=tp_price,
         sl_price=sl_price,
         status="open",
+        exchange=signal.exchange,
+        market_type=DEFAULT_MARKET_TYPE,
+        account_label=DEFAULT_ACCOUNT_LABEL,
+        exit_strategy="tp_sl_static",
     )
     db.add(db_position)
     db.commit()
@@ -214,6 +221,10 @@ async def receive_bounce_signal(
             "entry_price": entry_price,
             "qty": qty,
             "notional_usdt": notional_usdt,
+            "exchange": db_position.exchange,
+            "market_type": db_position.market_type,
+            "account_label": db_position.account_label,
+            "exit_strategy": db_position.exit_strategy,
         }
     )
 
@@ -225,4 +236,5 @@ async def receive_bounce_signal(
         "position_id": db_position.id,
         "tp_price": tp_price,
         "sl_price": sl_price,
+        "exit_strategy": db_position.exit_strategy,
     }

@@ -1,10 +1,11 @@
 # CryptoNakCore LOMS – Pre-Live Checklist MASTER (100€ semi-live)
 
-Versione aggiornata – 2025-12-02  
-Basata su: `docs/PRE_LIVE_ROADMAP.md`  
+Versione aggiornata – **2025-12-03**  
+Basata su: `docs/PRE_LIVE_ROADMAP.md` + `RickyBot + LOMS – Real Price & Smart Exit Roadmap`  
 (Stato: LOMS in **PAPER-SERVER** su Hetzner (`loms-paper-shadow-2025-12-01`),
-RickyBot in **Shadow Mode** con `LOMS_ENABLED=true` su Bitget/Bybit, nessun
-ordine reale verso l’exchange)
+RickyBot in **Shadow Mode** con `LOMS_ENABLED=true` su Bitget/Bybit,  
+**nessun ordine reale verso l’exchange**; Real Price Engine (PriceSource + ExitPolicy)
+già integrato lato codice ma usato solo in dev/dummy, non live.)
 
 ---
 
@@ -24,11 +25,22 @@ rollback immediato.
 - [x] LOMS PAPER-SERVER in esecuzione su Hetzner, profilo `ENVIRONMENT=paper`.
 - [x] Integrazione RickyBot → LOMS testata end-to-end  
       (segnale reale → ordine/posizione paper in locale; ora Shadow Mode attiva anche su Hetzner).
-- [x] Su Hetzner, LOMS PAPER-SERVER ha già gestito almeno 2 posizioni di test
+- [x] Su Hetzner, LOMS PAPER-SERVER ha già gestito posizioni di test
       (BTCUSDT long/short) chiuse con TP/SL in pochi secondi, confermate via
       `GET /positions` e `tools/print_stats.py`.
 - [x] Endpoint `/stats` funzionante + `tools/print_stats.py`.
 - [x] Endpoint `/health` funzionante + `tools/check_health.py`.
+- [x] Schema `Position` già “live-ready”:
+      `exchange`, `market_type`, `account_label`, `external_order_id`,
+      `external_position_ref`, `exit_strategy`, `dynamic_tp_price`,
+      `dynamic_sl_price`, `max_favorable_move`, `exit_meta`.
+- [x] Real Price Engine v1 integrato:
+      `PriceSource` (simulator/exchange), `PriceMode`, `PriceQuote`,
+      orchestrato da `auto_close_positions` tramite `ExitPolicy` (`StaticTpSlPolicy`);
+      su server Paper attuale usiamo ancora `PRICE_SOURCE=simulator` (no prezzi reali).
+- [x] `BrokerAdapterPaperSim` operativo: apertura posizioni paper via
+      `NewPositionParams` (symbol, side, qty, entry_price, exchange, market_type,
+      account_label, tp_price, sl_price, exit_strategy="tp_sl_static").
 
 ---
 
@@ -36,9 +48,9 @@ rollback immediato.
 
 ### 2.1 Versioning & tag
 
-- [ ] Tag LOMS paper stabile (es. `loms-paper-shadow-2025-12-01`).
+- [ ] Tag LOMS paper stabile (es. `loms-paper-shadow-2025-12-01` o simile).
 - [ ] Annotare nel README:
-  - [ ] tag RickyBot usato (es. `rickybot-pre-oms-tuning2-2025-11-30`),
+  - [ ] tag RickyBot usato (es. `rickybot-pre-oms-tuning2-2025-11-30` o successivo),
   - [ ] tag LOMS usato (es. `loms-paper-shadow-2025-12-01`),
   - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
 
@@ -52,6 +64,8 @@ rollback immediato.
         - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`
         - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`
         - `OMS_ENABLED=true`
+        - `PRICE_SOURCE=exchange` (per test con `DummyExchangeHttpClient`)
+        - `PRICE_MODE=last`
 
   - [x] **`PAPER-SERVER` (Hetzner)** – attualmente in uso:
         - `ENVIRONMENT=paper`
@@ -60,8 +74,10 @@ rollback immediato.
           (profilo attivo su `rickybot-01`)
         - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`
         - `OMS_ENABLED=true`
+        - `PRICE_SOURCE=simulator` (paper puro, nessun prezzo reale)
+        - `PRICE_MODE=last`
 
-- [x] Allineare `.env.sample` con `Settings` (✅ 2025-11-30):
+- [x] Allineare `.env.sample` con `Settings` (✅ 2025-11-30 + Real Price 2025-12-03):
   - [x] `ENVIRONMENT`
   - [x] `DATABASE_URL`
   - [x] `AUDIT_LOG_PATH`
@@ -69,8 +85,10 @@ rollback immediato.
   - [x] `MAX_OPEN_POSITIONS`
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
+  - [x] `PRICE_SOURCE`
+  - [x] `PRICE_MODE`
 
-- [x] Documentare Quickstart dev nel README (venv + uvicorn).
+- [x] Documentare Quickstart dev nel README (venv + uvicorn + uso tools health/stats).
 
 ### 2.3 Logging & retention
 
@@ -140,6 +158,9 @@ rollback immediato.
 - [x] Flag LOMS:
   - [x] `BROKER_MODE=paper|live` (per ora sempre `paper`, esposto in `/health`
         e visualizzabile con `python tools/check_health.py`).
+  - [x] `OMS_ENABLED` come kill-switch logico (se `false` → `/signals/bounce`
+        non crea più ordini/posizioni).
+
 - [ ] Procedura emergenza:
   - [ ] set `OMS_ENABLED=false` in env,
   - [ ] restart LOMS,
@@ -177,7 +198,9 @@ rollback immediato.
   - [ ] Controllare che:
     - [ ] `HTTP status code` sia `200`,
     - [ ] `Service status` sia `ok`,
-    - [ ] `Environment` e `Broker mode` siano quelli attesi (`dev` / `paper`).
+    - [ ] `Environment` e `Broker mode` siano quelli attesi (`dev` / `paper`),
+    - [ ] `price_source` / `price_mode` abbiano i valori previsti
+          (es. `simulator/last` sul server paper).
 - [ ] **Stats di partenza sensate**
   - [ ] Eseguire `python tools/print_stats.py`.
   - [ ] Verificare almeno:
@@ -200,7 +223,7 @@ rollback immediato.
         o screenshot) per storico giornaliero.
 - [ ] **Controllo posizioni aperte**
   - [ ] Verificare da `print_stats.py` che `open_positions = 0`.
-  - [ ] In caso di dubbi, controllare anche da `/docs` → `GET /positions`.
+  - [ ] In caso di dubbi, controllare anche via `GET /positions`.
 - [ ] **Verifica errori**
   - [ ] Dare un’occhiata agli ultimi log applicativi LOMS
         (traceback / errori evidenti).
@@ -227,7 +250,7 @@ rollback immediato.
   - [x] `LOMS_ENABLED=true`,
   - [x] `BROKER_MODE=paper`.
 - [ ] Lasciare girare per N giorni (es. 5–10)  
-      _(in corso: Shadow Mode su Hetzner avviata il 2025-12-01)_.
+      _(in corso: Shadow Mode su Hetzner avviata il 2025-12-01, in farm continua)._
 
 ### 5.2 Analisi Shadow
 
@@ -286,7 +309,7 @@ rollback immediato.
 
 - [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
 - [x] Definire meglio profili `DEV` vs `PAPER-SERVER`  
-      (✅ fatto 2025-12-01, profilo PAPER-SERVER attivo su Hetzner).
+      (✅ fatto 2025-12-01, profilo PAPER-SERVER attivo su Hetzner con Shadow Mode).
 - [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine  
       (✅ fatto 2025-11-30, vedi sezione 3.1).
 - [x] Avviare una prima Shadow Mode (locale + server)  

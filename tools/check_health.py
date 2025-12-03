@@ -53,6 +53,8 @@ def main() -> None:
     oms_enabled = data.get("oms_enabled")
     database_url = data.get("database_url")
     audit_log_path = data.get("audit_log_path")
+    price_source = data.get("price_source")
+    price_mode = data.get("price_mode")
 
     if status is not None:
         print(f"Service status  : {status}")
@@ -73,6 +75,12 @@ def main() -> None:
 
     if audit_log_path is not None:
         print(f"Audit log path  : {audit_log_path}")
+
+    if price_source is not None:
+        print(f"Price source    : {price_source}")
+
+    if price_mode is not None:
+        print(f"Price mode  : {price_mode}")
 
     print(f"Raw JSON        : {data}")
 
