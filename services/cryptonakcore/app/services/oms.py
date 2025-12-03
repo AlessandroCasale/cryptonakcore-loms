@@ -355,11 +355,14 @@ def auto_close_positions(db: Session) -> None:
     # Sorgente prezzi e modalità (last/bid/ask/...)
     price_source = _get_price_source()
     price_mode = settings.price_mode
+    price_source_label = str(settings.price_source)
 
     # Exit policy attuale (TP/SL statici)
     policy = StaticTpSlPolicy()
 
     for pos in open_positions:
+        age_sec = None
+
         # ⏱️ NON chiudere posizioni create da meno di 7 secondi
         if pos.created_at is not None:
             age_sec = (now - pos.created_at).total_seconds()
@@ -385,6 +388,8 @@ def auto_close_positions(db: Session) -> None:
                     "symbol": pos.symbol,
                     "error_type": type(e).__name__,
                     "error": str(e),
+                    "price_source": price_source_label,
+                    "price_mode": str(price_mode),
                 }
             )
             # Non chiude il watcher: salta solo questa posizione
@@ -430,5 +435,9 @@ def auto_close_positions(db: Session) -> None:
                 "pnl": float(pos.pnl),
                 "qty": qty,
                 "pos_id": pos.id,
+                "age_sec": age_sec,
+                "price_source": price_source_label,
+                "price_mode": str(price_mode),
             }
         )
+
