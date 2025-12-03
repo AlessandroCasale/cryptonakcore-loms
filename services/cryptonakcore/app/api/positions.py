@@ -10,11 +10,11 @@ from app.db.session import SessionLocal
 from app.db.models import Position as PositionModel
 from app.core.config import settings
 from app.services.oms import _normalize_side, _get_price_source
-from app.services.pricing import select_price
+from app.services.pricing import select_price, PriceSourceError
 
 
 router = APIRouter()
-logger = logging.getLogger("positions")
+logger = logging.getLogger("api.positions")
 
 
 # ------------ Pydantic ------------
@@ -65,11 +65,29 @@ def get_db():
 
 
 @router.get("/", response_model=list[PositionResponse])
-async def list_positions(db: Session = Depends(get_db)):
+async def list_positions(
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
     """
-    Lista tutte le posizioni (aperte + chiuse).
+    Lista le posizioni.
+
+    - Se status NON è passato → tutte le posizioni (aperte + chiuse).
+    - Se status = "open"  → solo posizioni aperte.
+    - Se status = "closed" → solo posizioni chiuse.
     """
-    positions = db.query(PositionModel).all()
+    query = db.query(PositionModel)
+
+    if status is not None:
+        status_norm = status.lower()
+        if status_norm not in ("open", "closed"):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid status. Allowed values: 'open', 'closed'.",
+            )
+        query = query.filter(PositionModel.status == status_norm)
+
+    positions = query.all()
     return positions
 
 
@@ -96,28 +114,54 @@ async def close_position(position_id: int, db: Session = Depends(get_db)):
     if position is None:
         raise HTTPException(status_code=404, detail="Position not found")
 
+    # Se è già chiusa, restituiamo comunque l'oggetto attuale (idempotente)
     if position.status == "closed":
-        # è già chiusa, restituiamo comunque l'oggetto attuale
         return position
 
     # Prezzo corrente dal PriceSource configurato (simulator / exchange / ...)
     price_source = _get_price_source()
+    price_mode = settings.price_mode
+    price_source_label = str(settings.price_source)
+    now = datetime.utcnow()
+
     try:
         quote = price_source.get_quote(position.symbol)
-        current_price = float(select_price(quote, settings.price_mode))
-    except Exception as e:
+        current_price = float(select_price(quote, price_mode))
+
+    except PriceSourceError as e:
+        # Errore specifico della sorgente prezzi (HTTP, timeout, dati invalidi, ecc.)
         logger.error(
             {
-                "event": "manual_close_price_error",
+                "event": "price_source_error_manual_close",
                 "position_id": position_id,
                 "symbol": position.symbol,
                 "error_type": type(e).__name__,
                 "error": str(e),
+                "price_source": price_source_label,
+                "price_mode": str(price_mode),
             }
         )
         raise HTTPException(
             status_code=503,
-            detail="Unable to fetch current price for manual close",
+            detail="Price source unavailable for manual close",
+        )
+
+    except Exception as e:
+        # Qualsiasi altro errore interno
+        logger.error(
+            {
+                "event": "manual_close_unexpected_error",
+                "position_id": position_id,
+                "symbol": position.symbol,
+                "error_type": type(e).__name__,
+                "error": str(e),
+                "price_source": price_source_label,
+                "price_mode": str(price_mode),
+            }
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error during manual close",
         )
 
     # Calcolo PnL (riusiamo la stessa normalizzazione del side di OMS)
@@ -146,10 +190,26 @@ async def close_position(position_id: int, db: Session = Depends(get_db)):
 
     # Aggiorniamo stato e metadati di chiusura
     position.status = "closed"
-    position.closed_at = datetime.utcnow()
+    position.closed_at = now
     position.close_price = current_price
     position.auto_close_reason = "manual"
 
     db.commit()
     db.refresh(position)
+
+    logger.info(
+        {
+            "event": "position_closed_manual",
+            "position_id": position.id,
+            "symbol": position.symbol,
+            "side": side,
+            "entry": entry,
+            "exit": current_price,
+            "pnl": float(position.pnl) if position.pnl is not None else None,
+            "qty": qty,
+            "price_source": price_source_label,
+            "price_mode": str(price_mode),
+        }
+    )
+
     return position

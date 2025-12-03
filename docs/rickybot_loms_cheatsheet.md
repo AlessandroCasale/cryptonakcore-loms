@@ -48,6 +48,15 @@ Preambolo – Stato attuale (Shadow Mode agganciata)
     - con almeno un alert reale.
   - Modalità **Shadow Mode** attiva: ordini solo nel DB paper di LOMS, non sull’exchange.
 
+- 📌 **Nota Real Price (DEV vs PAPER-SERVER)**  
+  - **DEV locale (Windows)**  
+    - `PRICE_SOURCE=exchange` con **DummyExchangeHttpClient`**  
+    - Le posizioni paper usano già il nuovo percorso **Real Price / ExitEngine** (PriceSource + ExitPolicy),  
+      ma le quote sono ancora **finte** (client HTTP dummy, nessun contatto reale con Bitget/Bybit).  
+  - **PAPER-SERVER (Hetzner)**  
+    - `PRICE_SOURCE=simulator`  
+    - LOMS lavora ancora con **MarketSimulator v2** per TP/SL (paper puro),  
+      mentre ascolta comunque tutti i segnali reali da RickyBot in Shadow Mode.
 
 0) REPO, VENV, GIT                              0) SSH, REPO, VENV, GIT
 ----------------------------------------        ------------------------------------------

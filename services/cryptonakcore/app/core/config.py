@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from pydantic_settings import BaseSettings  # per Pydantic v2
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict  # per Pydantic v2
 
 from app.services.pricing import PriceSourceType, PriceMode
 
@@ -10,6 +11,13 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
+    # Config Pydantic Settings v2
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",  # ignora eventuali env "in più" (come loms_max_size_per_position_usdt)
+    )
+
     DATABASE_URL: str = "sqlite:///./cryptonakcore_loms.db"
     JWT_SECRET: str = "dev-secret"
 
@@ -26,7 +34,14 @@ class Settings(BaseSettings):
     # Limiti base di rischio (paper)
     MAX_OPEN_POSITIONS: int = 10              # totale posizioni aperte
     MAX_OPEN_POSITIONS_PER_SYMBOL: int = 3    # per singolo symbol
-    MAX_SIZE_PER_POSITION_USDT: float = 10.0  # size massima per posizione (paper)
+
+    # NOTA: usiamo una env *namespaced* per evitare conflitti con variabili di sistema
+    # tipo MAX_SIZE_PER_POSITION_USDT=10.0 lasciate in giro.
+    # LOMS userà SOLO LOMS_MAX_SIZE_PER_POSITION_USDT.
+    MAX_SIZE_PER_POSITION_USDT: float = Field(
+        1000.0,
+        env="LOMS_MAX_SIZE_PER_POSITION_USDT",
+    )  # size massima per posizione (paper)
 
     # file dove salviamo i segnali di bounce in formato JSON Lines
     AUDIT_LOG_PATH: str = str(BASE_DIR / "data" / "bounce_signals.jsonl")
@@ -39,8 +54,8 @@ class Settings(BaseSettings):
     # Quale campo del quote usare: last | bid | ask | mid | mark
     PRICE_MODE: PriceMode = PriceMode.LAST
 
-    class Config:
-        env_file = ".env"
+    # Scheduler / auto-close watcher
+    AUTO_CLOSE_INTERVAL_SEC: int = 1
 
     # Alias "comodi" in lower-case, usati da /health e da eventuali altri punti
     @property

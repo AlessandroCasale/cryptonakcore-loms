@@ -11,6 +11,8 @@ from app.services.pricing import (
     PriceSourceType,
     SimulatedPriceSource,
     select_price,
+    PriceSourceError,
+    ExchangePriceSource,
 )
 from app.services.exit_engine import (
     StaticTpSlPolicy,
@@ -18,7 +20,6 @@ from app.services.exit_engine import (
     ExitActionType,
 )
 from app.services.exchange_client import (
-    ExchangePriceSource,
     get_default_exchange_client,
 )
 from app.services.broker_adapter import (
@@ -373,15 +374,31 @@ def auto_close_positions(db: Session) -> None:
         if pos.tp_price is None and pos.sl_price is None:
             continue
 
-        # Recupero prezzo & valutazione policy con hardening errori
         try:
+            # Recupero prezzo & valutazione policy
             quote = price_source.get_quote(pos.symbol)
             current_price = float(select_price(quote, price_mode))
 
-            # Costruiamo il contesto per la policy
             ctx = ExitContext(price=current_price, quote=quote, now=now)
             actions = policy.on_new_price(pos, ctx)
+
+        except PriceSourceError as e:
+            # Problema specifico della sorgente prezzi (HTTP/timeout/dati invalidi)
+            logger.error(
+                {
+                    "event": "price_source_error",
+                    "symbol": pos.symbol,
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "price_source": price_source_label,
+                    "price_mode": str(price_mode),
+                }
+            )
+            # Non fermiamo il watcher, saltiamo solo questa posizione
+            continue
+
         except Exception as e:
+            # Qualsiasi altro errore a valle (ExitEngine, selezione prezzo, ecc.)
             logger.error(
                 {
                     "event": "exit_engine_error",
@@ -440,4 +457,3 @@ def auto_close_positions(db: Session) -> None:
                 "price_mode": str(price_mode),
             }
         )
-

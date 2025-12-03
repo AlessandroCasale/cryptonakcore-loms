@@ -6,6 +6,22 @@ from enum import Enum
 from typing import Optional, Protocol, Any
 
 
+class PriceSourceError(Exception):
+    """
+    Errore di alto livello per le sorgenti prezzi.
+
+    Viene usato da tutte le implementazioni di PriceSource per segnalare:
+    - timeout / errori HTTP verso l'exchange
+    - dati mancanti o non validi
+    - qualunque situazione in cui NON è sicuro usare il prezzo.
+    """
+
+    def __init__(self, message: str, symbol: Optional[str] = None, source: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.symbol = symbol
+        self.source = source
+
+
 class PriceSourceType(str, Enum):
     """
     Da dove arrivano i prezzi.
@@ -83,9 +99,10 @@ class PriceSource(Protocol):
         """
         Restituisce un PriceQuote per il simbolo richiesto.
 
-        In caso di errore l'implementazione concreta può:
-        - sollevare un'eccezione specifica (preferibile), oppure
-        - loggare e sollevare comunque (no swallow silenziosi).
+        In caso di problemi deve sollevare PriceSourceError:
+        - errori rete / HTTP
+        - dati mancanti o non numerici
+        - qualsiasi situazione in cui non è sicuro usare il prezzo
         """
         ...
 
@@ -143,11 +160,36 @@ class SimulatedPriceSource:
         self._simulator = simulator
 
     def get_quote(self, symbol: str) -> PriceQuote:
-        price = self._simulator.get_price(symbol)
+        try:
+            price = self._simulator.get_price(symbol)
+        except Exception as exc:
+            # qualsiasi problema nel simulatore → errore di sorgente
+            raise PriceSourceError(
+                f"SimulatedPriceSource failed for symbol={symbol}: {exc!r}",
+                symbol=symbol,
+                source=self.source_type.value,
+            ) from exc
+
+        if price is None:
+            raise PriceSourceError(
+                f"SimulatedPriceSource returned None for symbol={symbol}",
+                symbol=symbol,
+                source=self.source_type.value,
+            )
+
+        try:
+            price_float = float(price)
+        except (TypeError, ValueError) as exc:
+            raise PriceSourceError(
+                f"SimulatedPriceSource returned non-numeric price for symbol={symbol}: {price!r}",
+                symbol=symbol,
+                source=self.source_type.value,
+            ) from exc
+
         return PriceQuote(
             symbol=symbol,
             ts=datetime.now(timezone.utc),
-            last=price,
+            last=price_float,
             source=self.source_type,
             mode=PriceMode.LAST,
         )
@@ -177,26 +219,60 @@ class ExchangePriceSource:
         self._client = client
 
     def get_quote(self, symbol: str) -> PriceQuote:
-        data = self._client.get_ticker(symbol)
+        exchange_name = getattr(self._client, "exchange_name", "exchange")
+
+        try:
+            data = self._client.get_ticker(symbol)
+        except Exception as exc:
+            # timeout / errori HTTP / ecc.
+            raise PriceSourceError(
+                f"ExchangePriceSource failed to fetch ticker for symbol={symbol}: {exc!r}",
+                symbol=symbol,
+                source=exchange_name,
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise PriceSourceError(
+                f"ExchangePriceSource expected dict from get_ticker for symbol={symbol}, got {type(data)!r}",
+                symbol=symbol,
+                source=exchange_name,
+            )
 
         # Estraggo i campi in modo difensivo, adattandomi a vari naming possibili.
-        bid = data.get("bid")
-        ask = data.get("ask")
-
-        last = (
+        raw_bid = data.get("bid")
+        raw_ask = data.get("ask")
+        raw_last = (
             data.get("last")
             or data.get("last_price")
             or data.get("close")
         )
-
-        mark = (
+        raw_mark = (
             data.get("mark")
             or data.get("mark_price")
         )
 
+        def _to_float_or_none(key: str, value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError) as exc:
+                raise PriceSourceError(
+                    f"ExchangePriceSource: invalid numeric value for {key} in ticker for {symbol}: {value!r}",
+                    symbol=symbol,
+                    source=exchange_name,
+                ) from exc
+
+        bid = _to_float_or_none("bid", raw_bid)
+        ask = _to_float_or_none("ask", raw_ask)
+        last = _to_float_or_none("last", raw_last)
+        mark = _to_float_or_none("mark", raw_mark)
+
         if last is None and bid is None and ask is None and mark is None:
-            raise ValueError(
-                f"ExchangePriceSource: nessun prezzo valido nel ticker per {symbol}"
+            raise PriceSourceError(
+                f"ExchangePriceSource: nessun prezzo valido nel ticker per {symbol}",
+                symbol=symbol,
+                source=exchange_name,
             )
 
         return PriceQuote(

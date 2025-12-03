@@ -1,6 +1,6 @@
 RickyBot + LOMS – Real Price & Smart Exit Roadmap
 
-(versione Jira-style – v0.4 – 2025-12-03)
+(versione Jira-style – v0.5 – 2025-12-03)
 
 Scope: percorso definitivo per arrivare a:
 
@@ -136,6 +136,11 @@ invece di usare direttamente `MarketSimulator`, ora legge:
 - applica le `ExitAction` di tipo `CLOSE_POSITION` aggiornando `Position`
   (`status`, `closed_at`, `close_price`, `pnl`, `auto_close_reason`).
 
+✅ Log di orchestrazione arricchiti:
+
+- in caso di errore su PriceSource, log strutturati con `price_source` e `price_mode`,  
+- in caso di chiusura posizione, log con `age_sec`, `price_source`, `price_mode` e PnL.
+
 ✅ Aggiornare `POST /positions/{id}/close` (chiusura manuale):
 
 - usa lo stesso `_get_price_source()` di `auto_close_positions`,  
@@ -205,7 +210,8 @@ invece di usare direttamente `MarketSimulator`, ora legge:
 
 ### 2.3 Flusso RickyBot → LOMS → BrokerAdapter
 
-🟡 Stato: lato LOMS paper pronto, integrazione RickyBot reale rimane TODO
+🟡 Stato: lato LOMS paper pronto, integrazione RickyBot reale (runner) rimane TODO  
+(ma **smoke-test LAB dev** con tool RickyBot completato).
 
 ⬜ Verificare payload `BounceSignal` lato RickyBot (quando ri-agganciamo il client LOMS):
 
@@ -243,6 +249,57 @@ invece di usare direttamente `MarketSimulator`, ora legge:
     "sl_price": ...,
     "exit_strategy": "tp_sl_static"
   }
+✅ Smoke-test LAB dev RickyBot → LOMS (2025-12-03)
+
+Ambiente:
+
+ENVIRONMENT=dev, BROKER_MODE=paper, OMS_ENABLED=True,
+
+PRICE_SOURCE=exchange, PRICE_MODE=last,
+
+MAX_SIZE_PER_POSITION_USDT=1000.0.
+
+Bugfix importante:
+
+scoperta variabile d’ambiente globale MAX_SIZE_PER_POSITION_USDT=10.0
+che sovrascriveva .env e faceva scattare sempre il risk block
+(max_size_per_position_exceeded (notional=100.0000, limit=10.0000)).
+
+rimossa la env globale → settings.MAX_SIZE_PER_POSITION_USDT=1000.0
+come da .env.
+
+Test eseguito:
+
+comando python tools/test_notify_loms.py in RickyBot (crypto-bot),
+con payload di esempio su BTCUSDT @ 100, TP 4.5%, SL 1.5%.
+
+LOMS risponde con:
+
+risk_ok = True,
+
+evento log bounce_order_created,
+
+creazione di order_id=7, position_id=7 con:
+
+entry_price=100.0, tp_price=104.5, sl_price=98.5,
+
+exchange="bitget", market_type="paper_sim", account_label="lab_dev".
+
+Verifica via API:
+
+GET /positions/ mostra la posizione id=7 open
+con i campi corretti.
+
+Verifica via tool:
+
+tools/exit_engine_report.py mostra:
+
+Totale posizioni: 7,
+
+closed: 6, open: 1 (la nuova posizione),
+
+statistiche PnL per auto_close_reason (tp, manual).
+
 ⬜ Step futuri:
 
 Allineare il modello Order e il flusso BrokerAdapter in modo che order_id
@@ -250,7 +307,8 @@ nella risposta venga dalla stessa catena logica
 (oggi è ancora “ibrido”: Order/Position esistenti + BrokerAdapterPaperSim).
 
 Collegare RickyBot reale in Shadow/Semi-live
-(Bounce EMA10 Strict → LOMS con profilo paper_real_price / semi_live_100eur).
+(Bounce EMA10 Strict → LOMS con profilo paper_real_price / semi_live_100eur),
+al posto del solo tool test_notify_loms.py.
 
 2.4 Abilitazione semi-live 100€ (profilo dedicato)
 ⬜ Tutto ancora da fare
@@ -314,13 +372,32 @@ usa lo stesso PriceSource e la stessa ExitPolicy (per ora chiusura diretta),
 
 marchia auto_close_reason = "manual" per distinguere la chiusura manuale dall’auto-close policy.
 
-3.3 ExitPolicy iniziali
+3.3 ExitPolicy iniziali & strumenti diagnostici
 ✅ ExitPolicyStaticTpSl
 
 Replica la logica attuale TP/SL fissi,
 
 già integrata in auto_close_positions come policy di default
 (exit_strategy = "tp_sl_static" in LAB).
+
+✅ Tool tools/exit_engine_report.py (2025-12-03)
+
+Legge il DB LOMS (loms_dev.db o loms_paper.db a seconda dell’ambiente).
+
+Stampa:
+
+totale posizioni,
+
+conteggio per status (open / closed),
+
+statistiche PnL aggregate per auto_close_reason
+(tp, sl, manual, ecc. – media, min, max).
+
+Usato per verificare:
+
+le 6 posizioni chiuse di test (5 tp, 1 manual),
+
+la nuova posizione id=7 ancora open in LAB dev.
 
 ⬜ ExitPolicyTrailingV1 (fase 2)
 
@@ -365,16 +442,45 @@ PRICE_MODE=last (o altro, ma comunque prezzi reali)
 
 RISK_PROFILE=semi_live_100eur
 
-Oggi (profilo LAB dev, locale):
+🔹 Oggi (profilo LAB dev, locale):
 
 BROKER_MODE = paper,
+
+ENVIRONMENT = dev,
+
+OMS_ENABLED = True,
 
 PRICE_SOURCE = exchange (ma è possibile usare anche simulator),
 
 PRICE_MODE = last,
 
-testato e funzionante con DummyExchangeHttpClient in dev
-(auto-close + manual-close).
+MAX_SIZE_PER_POSITION_USDT = 1000.0 letto da .env
+
+Bugfix 2025-12-03:
+
+individuata env globale MAX_SIZE_PER_POSITION_USDT=10.0 che overrideava .env
+e faceva scattare il risk block;
+
+rimossa la variabile globale → il risk engine usa correttamente il limite da .env
+(1000.0).
+
+Stato testato e funzionante:
+
+DummyExchangeHttpClient in dev (PRICE_SOURCE=exchange) con:
+
+auto-close + manual-close coerenti,
+
+ExitEngine con policy tp_sl_static,
+
+tool exit_engine_report per le statistiche.
+
+Pipeline RickyBot (tool) → LOMS:
+
+tools/test_notify_loms.py invia un segnale Bounce finto,
+
+LOMS crea order_id/position_id con TP/SL statici,
+
+posizione visibile via /positions e inclusa nel report ExitEngine.
 
 5.2 Panic Button
 ⬜ Da scrivere nel Runbook

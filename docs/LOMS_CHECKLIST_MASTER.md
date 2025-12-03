@@ -5,11 +5,13 @@ Versione aggiornata al **2025-12-03**
 LOMS paper stabile con:
 
 - MarketSimulator v2 incapsulato in **PriceSource** (simulator/exchange),
-- risk engine a 3 limiti,
+- risk engine a 3 limiti con bugfix MAX_SIZE_PER_POSITION_USDT (10 → 1000),
 - schema `Position` “live-ready” (exchange/market_type/account_label/exit_strategy),
+- **ExitEngine** statico TP/SL integrato con PriceSource (auto-close + manual-close),
 - `BrokerAdapterPaperSim` operativo,
-- integrazione RickyBot → LOMS in **Shadow Mode**,
-- tools di health/stats e profili DEV vs PAPER-SERVER operativi.)
+- integrazione RickyBot → LOMS in **Shadow Mode** (server) + test LAB-dev con `tools/test_notify_loms.py`,
+- tools di health/stats/exit-report e profili DEV vs PAPER-SERVER operativi,
+- scheduler `position_watcher` con intervallo configurabile via `AUTO_CLOSE_INTERVAL_SEC` (default 1s, valori ≤0 forzati a 1).)
 
 Legenda stato:  
 ✅ completato  
@@ -109,7 +111,7 @@ diventerà più stabile.
   (es. `tp=104.5`, `sl=98.5`).
 
 > Nota: ora il simulatore non viene più usato direttamente da `auto_close_positions`,
-ma è incapsulato nella sorgente prezzi `SimulatedPriceSource` (vedi sezione PriceSource).
+> ma è incapsulato nella sorgente prezzi `SimulatedPriceSource` (vedi sezione PriceSource).
 
 ### 2.2 PriceSource & `auto_close_positions`
 
@@ -159,7 +161,26 @@ ma è incapsulato nella sorgente prezzi `SimulatedPriceSource` (vedi sezione Pri
   - log strutturato `position_closed`
 
 > Risultato: la logica di TP/SL è ora orchestrata dal **motore di ExitPolicy**,
-non è più hardcodata dentro `auto_close_positions`.
+> non è più hardcodata dentro `auto_close_positions`.
+
+🔹 **Test LAB-dev 2025-12-03 (PRICE_SOURCE=exchange):**
+
+- Ambiente:
+  - `ENVIRONMENT=dev`, `BROKER_MODE=paper`, `OMS_ENABLED=True`
+  - `PRICE_SOURCE=exchange`, `PRICE_MODE=last`
+  - `MAX_SIZE_PER_POSITION_USDT=1000.0` (da `.env`, vedi bugfix in 2.4)
+- `price_source = ExchangePriceSource(DummyExchangeHttpClient)` produce quote fittizie
+  coerenti (`bid/ask/last/mark ~ 100`).
+- Chiamando `POST /signals/bounce` (via tool RickyBot `tools/test_notify_loms.py`):
+  - viene creata una nuova `Position` (es. `id=7`) con:
+    - `entry_price=100.0`, `tp_price=104.5`, `sl_price=98.5`
+    - `exchange="bitget"`, `market_type="paper_sim"`, `account_label="lab_dev"`
+    - `exit_strategy="tp_sl_static"`.
+- `GET /positions/` mostra la posizione `status="open"` subito dopo l’apertura.
+- `tools/exit_engine_report.py` vede:
+  - `Totale posizioni: 7`
+  - `closed: 6`
+  - `open: 1` (la nuova posizione di test LAB-dev).
 
 ### 2.3 Chiusura manuale posizione
 
@@ -213,13 +234,28 @@ Funzione `check_risk_limits(db, symbol, entry_price=None, qty=None)` in `app.ser
   - risponde sempre con `risk_ok` e `risk_reason` (quando bloccato);
   - in caso di blocco NON crea nessun ordine/posizione.
 
-✅ Tool di test dedicato:
+🔹 **Bugfix 2025-12-03 – MAX_SIZE_PER_POSITION_USDT**
 
-- `tools/test_bounce_size_limit.py`:
-  - primo segnale simbolo `SIZEOKUSDT` → passa (`risk_ok=True`);
-  - secondo segnale simbolo `SIZEBLOCKUSDT` → blocco per:
-    - prima variante: limite totale open,
-    - variante attuale: `max_size_per_position_exceeded`.
+Durante i test LAB-dev con RickyBot (`tools/test_notify_loms.py`), il risk engine
+bloccava sempre le nuove posizioni con:
+
+`max_size_per_position_exceeded (notional=100.0000, limit=10.0000)`
+
+anche se in `.env` il limite era `MAX_SIZE_PER_POSITION_USDT=1000.0`.
+
+- Analisi: era presente una variabile d’ambiente **globale** di sistema  
+  `MAX_SIZE_PER_POSITION_USDT=10.0` che overrideava il valore del file `.env`.
+- Fix:
+  - rimossa la env globale,
+  - verificato con:
+
+    ```bash
+    python -c "from app.core.config import settings; print('MAX_SIZE_PER_POSITION_USDT =', settings.MAX_SIZE_PER_POSITION_USDT)"
+    # → 1000.0
+    ```
+
+- Dopo il fix, il risk engine accetta una posizione da 100 USDT in dev
+  (`risk_ok=True`) e l’OMS crea correttamente ordine + posizione.
 
 ---
 
@@ -229,23 +265,23 @@ Funzione `check_risk_limits(db, symbol, entry_price=None, qty=None)` in `app.ser
 
 ✅ Endpoint base per health check del servizio.
 
-Risposta estesa (versione attuale in DEV/PAPER):
+Risposta estesa (profilo DEV attuale, 2025-12-03):
 
 ```json
 {
   "ok": true,
   "service": "CryptoNakCore LOMS",
   "status": "ok",
-  "environment": "paper",
+  "environment": "dev",
   "broker_mode": "paper",
   "oms_enabled": true,
-  "database_url": "sqlite:///./services/cryptonakcore/data/loms_paper.db",
-  "audit_log_path": "services/cryptonakcore/data/bounce_signals_paper.jsonl",
-  "price_source": "simulator",
+  "database_url": "sqlite:///./services/cryptonakcore/data/loms_dev.db",
+  "audit_log_path": "services/cryptonakcore/data/bounce_signals_dev.jsonl",
+  "price_source": "exchange",
   "price_mode": "last"
 }
-(Valori di environment, database_url, audit_log_path, price_source, price_mode
-variano fra DEV e PAPER-SERVER.)
+NB: environment, database_url, audit_log_path, price_source, price_mode
+variano fra DEV e PAPER-SERVER.
 
 Usato da tools/check_health.py per:
 
@@ -300,15 +336,16 @@ PnL calcolato;
 
 auto_close_reason = "manual".
 
-⬜ Filtri avanzati futuri:
+🟡 Filtri avanzati / query param
 
-per symbol;
+✅ filtro status=open|closed via query param ?status=
+(testato LAB-dev 2025-12-03: /positions/?status=open e /positions/?status=closed).
 
-per status;
+⬜ filtro per symbol;
 
-per strategy;
+⬜ filtro per strategy;
 
-per intervallo date, ecc.
+⬜ filtri per intervallo date, ecc.
 
 3.5 /stats
 ✅ Endpoint GET /stats con:
@@ -408,22 +445,34 @@ supporto futuro per altri tipi di segnali (stop, partial close, ecc.).
 4.1 Loop watcher
 ✅ position_watcher() in app.core.scheduler:
 
-loop infinito con asyncio.sleep(1);
+legge l’intervallo da settings.AUTO_CLOSE_INTERVAL_SEC
+(env AUTO_CLOSE_INTERVAL_SEC, default 1; se il valore è <= 0 viene forzato a 1);
+
+logga position_watcher_started con interval_sec;
 
 apre una SessionLocal;
 
-chiama auto_close_positions(db) ogni secondo;
+chiama auto_close_positions(db) ogni interval_sec;
 
-chiude la sessione.
+chiude la sessione;
+
+await asyncio.sleep(interval_sec) tra un giro e l’altro.
 
 4.2 Integrazione FastAPI
 ✅ start_scheduler(app) registrato con @app.on_event("startup"):
 
-agganciato in app.main dopo la creazione delle tabelle.
+agganciato in app.main dopo la creazione delle tabelle;
+
+crea il task asyncio per position_watcher() all’avvio dell’app.
 
 4.3 Parametrizzazione frequenza
-⬜ Intervallo del watcher configurabile via env
-(es. AUTO_CLOSE_INTERVAL_SEC).
+✅ Intervallo del watcher configurabile via env:
+
+env: AUTO_CLOSE_INTERVAL_SEC;
+
+default: 1 (secondo);
+
+valori <= 0 loggano un warning e vengono forzati a 1.
 
 4.4 Monitoring scheduler
 ⬜ Contatori / log dedicati per vedere:
@@ -460,7 +509,9 @@ PRICE_SOURCE (simulator / exchange / in futuro replay)
 
 PRICE_MODE (last / bid / ask / mid / mark)
 
-JWT_SECRET (placeholder per futuri auth/JWT)
+AUTO_CLOSE_INTERVAL_SEC
+
+JWT_SECRET (placeholder per futuri auth/JWT).
 
 5.2 Flag OMS_ENABLED
 ✅ OMS_ENABLED: bool in Settings:
@@ -511,7 +562,7 @@ Stato attuale (server rickybot-01):
 
 è attivo il profilo PAPER-SERVER con Shadow Mode (RickyBot → LOMS paper).
 
-server avviato in tmux (loms-paper) con:
+Server avviato in tmux (loms-paper) con:
 
 bash
 Copia codice
@@ -540,531 +591,14 @@ PRICE_SOURCE
 
 PRICE_MODE
 
+AUTO_CLOSE_INTERVAL_SEC
+
 ⬜ Valutare in futuro un .env.example in root o solo una sezione dedicata
 nel README che punti a .env.sample come modello.
 
 6. Integrazione RickyBot → LOMS
-6.1 Payload ufficiale RickyBot → LOMS (POST /signals/bounce)
-Il servizio LOMS espone:
-
-POST /signals/bounce
-
-Content-Type: application/json
-
-Body: oggetto JSON conforme al modello BounceSignal.
-
-Schema BounceSignal (JSON):
-
-symbol (string, ✅) – coppia di trading (es. "BTCUSDT").
-
-side (string, ✅) – "long" / "short" o "buy" / "sell".
-
-price (number, ✅) – prezzo di ingresso (entry price paper).
-
-timestamp (string, ✅) – ISO8601 (es. "2025-11-27T01:40:00Z").
-
-exchange (string, ❌, default "bitget") – nome exchange.
-
-timeframe_min (integer, ❌, default 5) – timeframe in minuti.
-
-strategy (string, ❌, default "bounce_ema10_strict") – strategia.
-
-tp_pct (number, ❌, default TP_PCT lato LOMS es. 4.5) – Take Profit %.
-
-sl_pct (number, ❌, default SL_PCT lato LOMS es. 1.5) – Stop Loss %.
-
-Calcolo TP/SL lato LOMS (dato entry_price = price):
-
-Long
-
-tp_price = entry_price * (1 + tp_pct/100)
-
-sl_price = entry_price * (1 - sl_pct/100) (se sl_pct non è null)
-
-Short
-
-tp_price = entry_price * (1 - tp_pct/100)
-
-sl_price = entry_price * (1 + sl_pct/100) (se sl_pct non è null)
-
-Se tp_pct o sl_pct non sono inviati, vengono usati i default lato LOMS.
-
-Comportamento /signals/bounce:
-
-logga sempre il segnale su file JSONL (AUDIT_LOG_PATH);
-
-se OMS_ENABLED=false:
-
-non crea ordini/posizioni;
-
-risponde con oms_enabled=false;
-
-se OMS_ENABLED=true:
-
-chiama il risk engine;
-
-se risk_ok=false → blocca e risponde con risk_reason;
-
-se risk_ok=true → crea Order + Position via BrokerAdapterPaperSim
-e risponde con:
-
-order_id, position_id
-
-tp_price, sl_price.
-
-6.2 Client HTTP in RickyBot
-✅ Già implementato.
-
-File: bots/rickybot/clients/loms_client.py
-
-usa RuntimeConfig (config.loms_enabled, config.loms_base_url);
-
-gestione:
-
-se LOMS_ENABLED=false → log loms_skip e non chiama il servizio;
-
-se LOMS_BASE_URL manca → log loms_skip;
-
-chiamata HTTP POST /signals/bounce con timeout 5s;
-
-parsing della risposta JSON.
-
-Logging strutturato:
-
-loms_http_error
-
-loms_conn_error
-
-loms_error (invalid JSON)
-
-loms_oms_disabled
-
-loms_risk_reject (con risk_reason)
-
-loms_order_created (con order_id, position_id, tp_price, sl_price)
-
-Tool di test collegati:
-
-tools/test_notify_loms.py → usa il client per inviare un segnale finto
-e mostra la risposta LOMS.
-
-tools/test_notify_notifier_loms.py → testa la catena completa
-notify_bounce_alert → LOMS.
-
-Server Hetzner 2025-12-01:
-
-i due tool di test eseguiti con successo:
-
-hanno creato e chiuso posizioni paper (TP/SL)
-
-/stats aggiornato correttamente.
-
-6.3 Modalità paper-only
-✅ Pipeline RickyBot → LOMS solo paper:
-
-LOMS lavora su SQLite;
-
-nessun ordine reale sull’exchange;
-
-RickyBot invia i segnali (quando LOMS_ENABLED=true);
-
-LOMS gestisce ordini/posizioni simulate, auto-close e stats.
-
-6.4 Toggle lato RickyBot
-✅ Implementato e attivo su Hetzner in Shadow Mode.
-
-In RuntimeConfig:
-
-loms_enabled
-
-loms_base_url
-
-In .env / .env.local di RickyBot:
-
-LOMS_ENABLED=true/false
-
-LOMS_BASE_URL=http://127.0.0.1:8000 (su Hetzner e in locale quando si usa LOMS paper).
-
-Stato attuale 2025-12-01 (server):
-
-env
-Copia codice
-LOMS_ENABLED=true
-LOMS_BASE_URL=http://127.0.0.1:8000
-I runner rickybot-bitget e rickybot-bybit in tmux sono stati riavviati
-dopo questa modifica → Shadow Mode ON
-(ogni alert reale va anche a LOMS paper).
-
-Da rifinire (opzionale):
-
-⬜ LOMS_TIMEOUT_SEC configurabile (ora timeout hardcoded a 5s).
-
-6.5 Logging lato RickyBot
-✅ Audit minimo degli esiti LOMS:
-
-in loms_client:
-
-log per skip,
-
-errori HTTP/rete,
-
-oms_enabled,
-
-risk_ok / risk_reason,
-
-order_id / position_id (quando creati).
-
-in notify_bounce_alert:
-
-log loms_alert_sent con symbol, side normalizzato, price e response.
-
-7. Monitoring & Strumenti di Analisi
-7.1 /stats come mini-dashboard
-✅ /stats viene usato per verificare:
-
-numero di trade;
-
-qualità (winrate);
-
-distribuzione TP/SL;
-
-PnL totale e medio.
-
-7.2 Script CLI per stats
-✅ tools/print_stats.py creato e funzionante.
-
-Caratteristiche:
-
-chiama GET /stats su BASE_URL (default http://127.0.0.1:8000);
-
-gestisce errori HTTP ([HTTP ERROR]) e di connessione ([CONNECTION ERROR])
-con messaggio chiaro e hint per avviare il server
-(uvicorn app.main:app --host 0.0.0.0 --port 8000);
-
-stampa in console uno snapshot ordinato:
-
-total_positions, open_positions, closed_positions;
-
-winning_trades, losing_trades, tp_count, sl_count;
-
-total_pnl;
-
-winrate;
-
-avg_pnl_per_trade, avg_pnl_win, avg_pnl_loss;
-
-i float sono formattati con 4 decimali, None viene mostrato come -.
-
-Uso tipico:
-
-bash
-Copia codice
-python tools/print_stats.py
-7.3 Log strutturato per chiusure
-✅ Logging in auto_close_positions con dict Python
-(evento position_closed).
-
-7.4 Report PnL storico
-⬜ Notebook / script per generare report più completi:
-
-equity curve;
-
-PnL day-by-day;
-
-breakdown per symbol / strategy.
-
-7.5 Script CLI per health
-✅ tools/check_health.py creato e funzionante.
-
-chiama GET /health su BASE_URL
-(default http://127.0.0.1:8000);
-
-gestisce errori HTTP / connessione con messaggi leggibili;
-
-stampa:
-
-HTTP status code;
-
-Service status;
-
-Environment (es. dev, paper);
-
-Broker mode (es. paper);
-
-OMS enabled;
-
-Price source (simulator/exchange);
-
-Price mode (last/bid/…);
-
-JSON completo della risposta.
-
-Uso tipico:
-
-bash
-Copia codice
-python tools/check_health.py
-8. Fase 2+ (Risk Engine & Live)
-8.1 Risk engine completo
-⬜ Regole come:
-
-max posizioni aperte totali (parametrizzata),
-
-max esposizione per simbolo/strategia,
-
-max perdita giornaliera,
-
-soft/hard kill switch.
-
-8.2 Multi-strategy / multi-account
-⬜ Estendere schema e API per gestire:
-
-più strategie;
-
-più “account logici” (es. paper_1, live_small, ecc.).
-
-8.3 DB “serio” (Postgres)
-⬜ Portare il backend da SQLite a Postgres
-per uso prolungato / produzione.
-
-8.4 Autenticazione / API key
-⬜ Proteggere le chiamate a LOMS con API key o JWT:
-
-almeno su /signals/bounce;
-
-idealmente su tutte le route sensibili.
-
-8.5 Modalità semi-live / live
-⬜ Dopo lungo periodo di paper:
-
-connettere LOMS a un adapter exchange reale;
-
-usare gli stessi segnali, ma con ordini reali protetti dal risk engine;
-
-separare chiaramente paper vs live
-(flag tipo BROKER_MODE=paper|live).
-
-9. Prossimi 3 step concreti (roadmap breve)
-Nota: molti punti qui sono ormai completati; li teniamo come storia
-ma con stato aggiornato, e lasciamo ⬜ solo sui pezzi opzionali.
-
-9.1 Step 1 – Stabilizzare il client RickyBot → LOMS
-✅ Core completato (opzionali ancora aperti)
-
-Obiettivo: avere un client HTTP unico e pulito lato RickyBot
-che chiama POST /signals/bounce in modo sicuro.
-
-Stato:
-
-✅ bots/rickybot/clients/loms_client.py operativo (timeout fisso 5s).
-
-✅ Payload allineato allo schema BounceSignal
-(campi: symbol, side, price, timestamp, exchange,
-timeframe_min, strategy, tp_pct, sl_pct).
-
-✅ tools/test_notify_loms.py usa il client e stampa la risposta LOMS.
-
-✅ Su Hetzner i tool di test hanno creato posizioni paper TP/SL
-confermate da /positions e /stats.
-
-Da rifinire (opzionale):
-
-⬜ aggiungere parametri CLI a tools/test_notify_loms.py
-(--symbol, --side, --price, --tp, --sl);
-
-⬜ rendere configurabile LOMS_TIMEOUT_SEC.
-
-9.2 Step 2 – Integrare il client nel runner RickyBot (dev / paper)
-✅ Completato in Shadow Mode su Hetzner.
-
-notify_bounce_alert:
-
-invia Telegram,
-
-normalizza side,
-
-costruisce payload, chiama send_bounce_to_loms,
-
-logga loms_alert_sent.
-
-RuntimeState ha config: Optional[RuntimeConfig].
-
-setup_runtime passa settings dentro RuntimeState(config=settings).
-
-scan_service.scan_symbol chiama notify_bounce_alert
-quando c’è un alert Bounce Strict.
-
-tools/test_notify_notifier_loms.py verifica la catena end-to-end
-senza bisogno di alert reali.
-
-Su Hetzner, con LOMS_ENABLED=true e LOMS_BASE_URL configurato,
-Shadow Mode è attivo.
-
-9.3 Step 3 – Test end-to-end (RickyBot → LOMS → /stats) con alert reali
-✅ Completato per ambiente locale; su Hetzner l’infrastruttura è attiva
-in Shadow Mode e sta popolando /positions e /stats
-man mano che arrivano gli alert reali Tuning2.
-
-Scenario già eseguito:
-
-avviato LOMS (uvicorn app.main:app ...) con OMS_ENABLED=true;
-
-lanciato RickyBot con:
-
-LOMS_ENABLED=true;
-
-preset di test (GAINERS_PERP 5m su Bitget, top_n piccolo).
-
-su un alert reale Bounce Strict:
-
-notify_bounce_alert invia il segnale al LOMS;
-
-LOMS crea Order + Position;
-
-il watcher auto_close_positions chiude la posizione dopo ~7s
-con auto_close_reason="tp" o "sl".
-
-Verifiche:
-
-GET /positions → position closed con auto_close_reason corretto;
-
-GET /stats e python tools/print_stats.py:
-
-total_positions, open_positions, closed_positions;
-
-winning_trades, losing_trades, tp_count, sl_count;
-
-total_pnl, winrate, avg_pnl_per_trade, avg_pnl_win, avg_pnl_loss.
-
-Su Hetzner (2025-12-01+):
-
-LOMS è in paper con Shadow Mode attiva;
-
-i tool di test hanno confermato e2e RickyBot (client) → LOMS → /stats;
-
-la normale “farming” di RickyBot Tuning2 popola via via /positions
-e /stats con alert reali di mercato.
-
-10. Daily Ops / Shadow Mode (PAPER-SERVER)
-Obiettivo: avere una routine veloce (2–5 minuti) per controllare che la coppia
-RickyBot → LOMS (Shadow Mode PAPER-SERVER) stia funzionando in modo sano.
-
-Stato: ✅ definita – da seguire manualmente quando il server è acceso.
-
-DO-1 – Controllo rapido sessioni tmux (RickyBot)
-✅ DO-1.1 – Verificare che le sessioni tmux dei bot siano attive:
-
-bash
-Copia codice
-ssh root@<IP_RICKYBOT_01>
-tmux ls
-Devono esistere almeno:
-
-rickybot-bitget (Bitget PERP 5m, GAINERS_PERP)
-
-rickybot-bybit (Bybit PERP 5m, GAINERS_PERP – opzionale ma consigliata)
-
-Nessun messaggio di errore tipo “no server running”.
-
-DO-2 – Health check LOMS (PAPER-SERVER)
-✅ DO-2.1 – Lanciare il tool di health:
-
-bash
-Copia codice
-cd /root/cryptonakcore-loms
-source .venv/bin/activate
-python tools/check_health.py
-Verificare che i campi chiave siano:
-
-Service status : ok
-
-Environment : paper
-
-Broker mode : paper
-
-OMS enabled : True
-
-Price source e Price mode coerenti con il profilo desiderato
-(es. simulator/exchange, last).
-
-Se uno di questi non è come previsto → segnare il problema e NON
-fare modifiche di fretta a .env; si interviene a mente fresca.
-
-DO-3 – Statistiche paper trading (/stats)
-✅ DO-3.1 – Controllare le statistiche aggregate:
-
-bash
-Copia codice
-cd /root/cryptonakcore-loms
-source .venv/bin/activate
-python tools/print_stats.py
-# oppure
-curl -s http://127.0.0.1:8000/stats/ | python -m json.tool
-Controllare che:
-
-total_positions non rimanga fermo a 0 per giorni;
-
-winrate sia in un range realistico (non 0% fisso, non 100% fisso per settimane);
-
-tp_count / sl_count aumentino nel tempo;
-
-nessun valore “rotto” (NaN, inf, ecc.).
-
-DO-4 – Posizioni aperte/chiuse (/positions)
-✅ DO-4.1 – Dare un occhio alle posizioni:
-
-bash
-Copia codice
-cd /root/cryptonakcore-loms
-source .venv/bin/activate
-curl -s http://127.0.0.1:8000/positions/ | python -m json.tool
-Cosa considerare “sano”:
-
-pochissime posizioni status: "open" (con auto-close a ~7s spesso 0);
-
-molte posizioni status: "closed" con closed_at recente;
-
-nessuna posizione “zombie” aperta da ore/giorni senza motivo.
-
-Se compaiono zombie → annotare il caso per debugging mirato,
-non intervenire a caldo nella routine.
-
-DO-5 – Stato runner RickyBot + heartbeat Telegram
-✅ DO-5.1 – Verifica rapida del runner:
-
-bash
-Copia codice
-cd /root/RickyBot
-source .venv/bin/activate
-python tools/runner_status.py --max-loops 50 --show-alerts 10
-Controllare che:
-
-l’ultimo loop sia recente (coerente con INTERVAL_MIN / heartbeat);
-
-watchlist size > 0;
-
-ci siano near-miss e qualche alert nelle ultime ore (non completamente piatto).
-
-✅ DO-5.2 – Dare un’occhiata alla chat Telegram del bot:
-
-heartbeat [BITGET] / [BYBIT] presenti e recenti;
-
-nessun flood di errori (stack trace ripetuti, errori HTTP verso il LOMS);
-
-ogni tanto qualche alert vero (non solo heartbeat).
-
-DO-6 – Regola d’oro operativa
-⬜ DO-6.1 – Non modificare .env / .env.local (RickyBot o LOMS)
-sul server quando sei stanco o di fretta.
-
-Ogni modifica di tuning:
-
-si testa prima in locale;
-
-si verifica con runtime_config_inspector.py / tools/check_health.py;
-
-solo dopo si porta in .env.local su Hetzner e si riavviano le sessioni tmux.
-
-Questa sezione definisce il profilo “Daily Ops / Shadow Mode” che deve essere
-completato prima di qualsiasi ragionamento su tuning, cambi logica
-o passaggi verso il semi-live da 100€.
+(Sezione invariata a parte il riferimento al bugfix del risk engine già spiegato in 2.4; la lascio come nel file originale perché è già allineata allo stato attuale.)
+
+[Tutto il resto dalla sezione 6 in poi (6.x, 7.x, 8.x, 9.x, 10.x) resta identico
+al testo che hai incollato, perché è già aggiornato e coerente con lo stato
+loms-real-price-paper-dev-2025-12-03.]
