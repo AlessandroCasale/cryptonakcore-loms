@@ -1,17 +1,54 @@
 # CryptoNakCore LOMS – Jira Checklist MASTER
 
-Versione aggiornata al **2025-12-03**  
-(Stato: `loms-real-price-paper-dev-2025-12-03` –  
+Versione aggiornata al **2025-12-04**  
+(Stato: `loms-real-price-paper-dev-2025-12-04` –  
 LOMS paper stabile con:
 
 - MarketSimulator v2 incapsulato in **PriceSource** (simulator/exchange),
-- risk engine a 3 limiti con bugfix MAX_SIZE_PER_POSITION_USDT (10 → 1000),
+- risk engine a 3 limiti con bugfix MAX_SIZE_PER_POSITION_USDT (10 → 1000 lato PAPER-SERVER),
 - schema `Position` “live-ready” (exchange/market_type/account_label/exit_strategy),
 - **ExitEngine** statico TP/SL integrato con PriceSource (auto-close + manual-close),
 - `BrokerAdapterPaperSim` operativo,
 - integrazione RickyBot → LOMS in **Shadow Mode** (server) + test LAB-dev con `tools/test_notify_loms.py`,
 - tools di health/stats/exit-report e profili DEV vs PAPER-SERVER operativi,
-- scheduler `position_watcher` con intervallo configurabile via `AUTO_CLOSE_INTERVAL_SEC` (default 1s, valori ≤0 forzati a 1).)
+- scheduler `position_watcher` con intervallo configurabile via `AUTO_CLOSE_INTERVAL_SEC` (default 1s, valori ≤0 forzati a 1),
+- **Real Price Engine DEV**: `ExchangePriceSource` con `DummyExchangeHttpClient`, `BybitHttpClient` e `BitgetHttpClient` + tool di test (`tools/test_exchange_price_source.py`, `tools/test_exit_engine_real_price.py`), **attivo solo in DEV** (PAPER-SERVER ancora su `PRICE_SOURCE=simulator`),
+- **Risk limits allineati**:
+  - DEV locale: `MAX_SIZE_PER_POSITION_USDT` ora letto correttamente da `.env` (es. 100000.0 per test di laboratorio),
+  - PAPER-SERVER: `MAX_SIZE_PER_POSITION_USDT=1000.0` confermato via Python dentro la venv del server.)
+
+---
+
+## Versioning – Stack RickyBot + LOMS (paper / shadow)
+
+### Stack paper+shadow v1.0 – stato al 2025-12-04
+
+Stack stabile usato oggi su PAPER-SERVER (Hetzner `rickybot-01`):
+
+- **RickyBot**
+  - Tag: `rickybot-loms-v1.0-2025-12-02`
+  - Profilo: Shadow Mode attivo, invia segnali a LOMS (paper), nessun ordine reale.
+
+- **CryptoNakCore LOMS**
+  - Tag: `loms-paper-shadow-v1.0-2025-12-04`
+  - ENVIRONMENT: `paper`
+  - BROKER_MODE: `paper`
+  - OMS_ENABLED: `true`
+  - PRICE_SOURCE: `simulator`
+  - PRICE_MODE: `last`
+
+Questa combinazione di tag definisce lo **stack paper+shadow v1.0**.  
+Nuove feature (Real Price avanzato, broker live, ecc.) vanno sviluppate su branch
+separati e solo quando stabili portano alla creazione di un nuovo tag
+(es. `loms-paper-shadow-v1.1-YYYY-MM-DD`).
+
+### Convenzione versioni (LOMS)
+
+- **v0.x / v1.0** – stack puramente paper/shadow, nessun ordine reale.
+- **v1.x+** – primi profili semi-live (sub-account Bitget 100€ con BROKER_MODE=live).
+- **v2.x e oltre** – evoluzioni importanti (nuovi exit engine, risk engine avanzato, ecc.).
+
+---
 
 Legenda stato:  
 ✅ completato  
@@ -131,8 +168,10 @@ diventerà più stabile.
 - legge `settings.price_source` (`PriceSourceType`)
 - se `SIMULATOR` → `SimulatedPriceSource(MarketSimulator)`
 - se `EXCHANGE` → `ExchangePriceSource(get_default_exchange_client())`
-  - attualmente `get_default_exchange_client()` restituisce un **DummyExchangeHttpClient**
-    che genera quote finte coerenti (`bid/ask/last/mark`)
+  - **2025-12-04**: `get_default_exchange_client()` sceglie il client in base a `settings.price_exchange`:
+    - `"dummy"`  → `DummyExchangeHttpClient` (valori fake ~100 per test),
+    - `"bybit"`  → `BybitHttpClient` (REST pubblico `/v5/market/tickers`),
+    - `"bitget"` → `BitgetHttpClient` (REST pubblico `/api/v2/spot/market/tickers`).
 - default/fallback → warning e ritorno a `SimulatedPriceSource(MarketSimulator)`
 
 ✅ `auto_close_positions(db)` (versione attuale):
@@ -163,7 +202,7 @@ diventerà più stabile.
 > Risultato: la logica di TP/SL è ora orchestrata dal **motore di ExitPolicy**,
 > non è più hardcodata dentro `auto_close_positions`.
 
-🔹 **Test LAB-dev 2025-12-03 (PRICE_SOURCE=exchange):**
+🔹 **Test LAB-dev 2025-12-03 (PRICE_SOURCE=exchange, PRICE_EXCHANGE=dummy)**
 
 - Ambiente:
   - `ENVIRONMENT=dev`, `BROKER_MODE=paper`, `OMS_ENABLED=True`
@@ -182,6 +221,25 @@ diventerà più stabile.
   - `closed: 6`
   - `open: 1` (la nuova posizione di test LAB-dev).
 
+🔹 **Test DEV 2025-12-04 – Real Price Bybit/Bitget (tools)**
+
+- Tool `tools/test_exchange_price_source.py`:
+  - usa `ExchangePriceSource()` senza client esplicito (factory interna);
+  - stampa env + tipo client (`Dummy client` / `Bybit client` / `Bitget client`);
+  - con:
+    - `PRICE_SOURCE=exchange`, `PRICE_EXCHANGE=bybit` → quote reali BTCUSDT da Bybit;
+    - `PRICE_SOURCE=exchange`, `PRICE_EXCHANGE=bitget` → quote reali BTCUSDT da Bitget.
+- Tool `tools/test_exit_engine_real_price.py`:
+  - prende un `PriceQuote` reale via `ExchangePriceSource()` (Bybit/Bitget);
+  - costruisce una posizione finta `FakePosition(symbol, side, tp_price, sl_price)` con:
+    - `tp_price` e `sl_price` a ±0.5% dal prezzo corrente;
+  - scenari testati:
+    - `[REAL]` → `price=current_price` → tipicamente **no action**;
+    - `[HIT_TP]` → `price=tp_price` → `CLOSE_POSITION (reason=tp)`;
+    - `[HIT_SL]` → `price=sl_price` → `CLOSE_POSITION (reason=sl)`.
+
+- Obiettivo: confermare che la catena **Real Price → ExchangePriceSource → ExitContext(price) → StaticTpSlPolicy** è funzionante in DEV senza toccare il PAPER-SERVER.
+
 ### 2.3 Chiusura manuale posizione
 
 ✅ Endpoint `POST /positions/{id}/close`:
@@ -199,7 +257,7 @@ diventerà più stabile.
   - commit + refresh.
 
 ✅ Testata sia con `PRICE_SOURCE=SIMULATOR` sia con `PRICE_SOURCE=EXCHANGE`
-(`DummyExchangeHttpClient`).
+(`DummyExchangeHttpClient`; Real Price verificato per ora tramite tool dedicati).
 
 ### 2.4 Risk engine base
 
@@ -234,40 +292,61 @@ Funzione `check_risk_limits(db, symbol, entry_price=None, qty=None)` in `app.ser
   - risponde sempre con `risk_ok` e `risk_reason` (quando bloccato);
   - in caso di blocco NON crea nessun ordine/posizione.
 
-🔹 **Bugfix 2025-12-03 – MAX_SIZE_PER_POSITION_USDT**
+🔹 **Bugfix 2025-12-03/04 – MAX_SIZE_PER_POSITION_USDT**
 
 Durante i test LAB-dev con RickyBot (`tools/test_notify_loms.py`), il risk engine
 bloccava sempre le nuove posizioni con:
 
 `max_size_per_position_exceeded (notional=100.0000, limit=10.0000)`
 
-anche se in `.env` il limite era `MAX_SIZE_PER_POSITION_USDT=1000.0`.
+anche se in `.env` il limite era molto più alto.
 
-- Analisi: era presente una variabile d’ambiente **globale** di sistema  
-  `MAX_SIZE_PER_POSITION_USDT=10.0` che overrideava il valore del file `.env`.
-- Fix:
-  - rimossa la env globale,
-  - verificato con:
+- Analisi e debug:
+  - inizialmente `settings.MAX_SIZE_PER_POSITION_USDT` risultava `10.0` in DEV;
+  - abbiamo verificato:
+    - variabili d’ambiente Windows (`[Environment]::GetEnvironmentVariable(..., 'User/Machine/Process')`),
+    - `os.environ.get("MAX_SIZE_PER_POSITION_USDT")` dentro la venv,
+    - il valore letto da Settings usando **il Python giusto** della venv:
 
-    ```bash
-    python -c "from app.core.config import settings; print('MAX_SIZE_PER_POSITION_USDT =', settings.MAX_SIZE_PER_POSITION_USDT)"
-    # → 1000.0
-    ```
+      ```bash
+      ../../.venv/bin/python -c "from app.core.config import settings; print(settings.MAX_SIZE_PER_POSITION_USDT)"
+      ```
 
-- Dopo il fix, il risk engine accetta una posizione da 100 USDT in dev
-  (`risk_ok=True`) e l’OMS crea correttamente ordine + posizione.
+  - la differenza di valore veniva da un mismatch fra:
+    - process/env (vecchio valore 10.0),
+    - e `.env` del progetto (valore aggiornato).
 
----
+- Fix finale:
+  - pulizia delle variabili d’ambiente residue,
+  - uso sistematico del Python della venv (`.venv`) per leggere Settings,
+  - aggiornamento coerente di `.env` DEV e PAPER-SERVER.
 
-## 3. API REST – Endpoints
+- Stato attuale confermato con:
 
-### 3.1 `/health`
+  ```bash
+  # DEV locale
+  ..\..\.venv\Scripts\python.exe -c "from app.core.config import settings; print('ENV=', settings.ENVIRONMENT, 'MAX_SIZE_PER_POSITION_USDT =', settings.MAX_SIZE_PER_POSITION_USDT)"
+  # → ENV= dev MAX_SIZE_PER_POSITION_USDT = 100000.0 (profilo LAB-dev)
 
+  # PAPER-SERVER (Hetzner)
+  ../../.venv/bin/python -c "from app.core.config import settings; print('ENV=', settings.ENVIRONMENT, 'MAX_SIZE_PER_POSITION_USDT =', settings.MAX_SIZE_PER_POSITION_USDT)"
+  # → ENV= paper MAX_SIZE_PER_POSITION_USDT = 1000.0
+Risultato:
+
+DEV: limite alto (es. 100000.0) per permettere test comodi,
+
+PAPER-SERVER: limite 1000.0 per test più realistici,
+
+nessuna variabile d’ambiente “fantasma” che forza più 10.0.
+
+3. API REST – Endpoints
+3.1 /health
 ✅ Endpoint base per health check del servizio.
 
-Risposta estesa (profilo DEV attuale, 2025-12-03):
+Risposta estesa (profilo DEV attuale, 2025-12-04):
 
-```json
+json
+Copia codice
 {
   "ok": true,
   "service": "CryptoNakCore LOMS",
@@ -509,7 +588,15 @@ PRICE_SOURCE (simulator / exchange / in futuro replay)
 
 PRICE_MODE (last / bid / ask / mid / mark)
 
+PRICE_EXCHANGE (dummy / bybit / bitget)
+
+PRICE_HTTP_TIMEOUT (timeout HTTP in secondi per i client reali)
+
+Scheduler:
+
 AUTO_CLOSE_INTERVAL_SEC
+
+Auth:
 
 JWT_SECRET (placeholder per futuri auth/JWT).
 
@@ -534,9 +621,18 @@ DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db
 
 AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl
 
-PRICE_SOURCE=exchange (in dev stiamo testando PriceSource con DummyExchange)
+PRICE_SOURCE=exchange
+→ in dev stiamo testando PriceSource con Dummy/Bybit/Bitget tramite:
+
+ExchangePriceSource + get_default_exchange_client() (selezione client da PRICE_EXCHANGE),
+
+tool tools/test_exchange_price_source.py,
+
+tool tools/test_exit_engine_real_price.py (Real Price + StaticTpSlPolicy).
 
 PRICE_MODE=last
+
+MAX_SIZE_PER_POSITION_USDT → valore alto (es. 100000.0) per test LAB-dev.
 
 PAPER-SERVER (Hetzner accanto a RickyBot, sempre paper)
 
@@ -552,11 +648,13 @@ AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl
 
 PRICE_SOURCE:
 
-oggi può rimanere simulator (profilo “paper puro”),
+oggi simulator (profilo “paper puro”),
 
-in futuro → exchange quando agganciamo davvero le API Bitget/Bybit.
+in futuro → exchange quando agganciamo davvero le API Bitget/Bybit sul server.
 
 PRICE_MODE=last (default attuale)
+
+MAX_SIZE_PER_POSITION_USDT=1000.0 (limite notional per singola posizione paper).
 
 Stato attuale (server rickybot-01):
 
@@ -569,7 +667,8 @@ Copia codice
 cd /root/cryptonakcore-loms/services/cryptonakcore
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 5.4 .env.sample / .env.example
-✅ services/cryptonakcore/.env.sample aggiornato (2025-11-30) con:
+✅ services/cryptonakcore/.env.sample aggiornato
+(2025-11-30, + note 2025-12-04 Real Price) con:
 
 ENVIRONMENT
 
@@ -591,14 +690,18 @@ PRICE_SOURCE
 
 PRICE_MODE
 
+PRICE_EXCHANGE
+
+PRICE_HTTP_TIMEOUT
+
 AUTO_CLOSE_INTERVAL_SEC
 
 ⬜ Valutare in futuro un .env.example in root o solo una sezione dedicata
 nel README che punti a .env.sample come modello.
 
-6. Integrazione RickyBot → LOMS
-(Sezione invariata a parte il riferimento al bugfix del risk engine già spiegato in 2.4; la lascio come nel file originale perché è già allineata allo stato attuale.)
-
-[Tutto il resto dalla sezione 6 in poi (6.x, 7.x, 8.x, 9.x, 10.x) resta identico
-al testo che hai incollato, perché è già aggiornato e coerente con lo stato
-loms-real-price-paper-dev-2025-12-03.]
+6+. Sezioni successive
+Tutto il resto dalla sezione 6 in poi (6.x, 7.x, 8.x, 9.x, 10.x)
+resta identico alla versione precedente della checklist, perché è già
+allineato allo stato loms-real-price-paper-dev-2025-12-04
+a parte le note aggiuntive sul Real Price Engine in DEV e il debug del
+limite MAX_SIZE_PER_POSITION_USDT.
