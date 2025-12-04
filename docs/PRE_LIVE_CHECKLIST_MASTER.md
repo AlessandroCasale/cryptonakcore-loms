@@ -1,11 +1,14 @@
 # CryptoNakCore LOMS – Pre-Live Checklist MASTER (100€ semi-live)
 
-Versione aggiornata – **2025-12-03**  
+Versione aggiornata – **2025-12-04**  
 Basata su: `docs/PRE_LIVE_ROADMAP.md` + `RickyBot + LOMS – Real Price & Smart Exit Roadmap`  
-(Stato: LOMS in **PAPER-SERVER** su Hetzner (`loms-paper-shadow-2025-12-01`),
-RickyBot in **Shadow Mode** con `LOMS_ENABLED=true` su Bitget/Bybit,  
-**nessun ordine reale verso l’exchange**; Real Price Engine (PriceSource + ExitPolicy)
-già integrato lato codice ma usato solo in dev/dummy, non live.)
+(Stato: **stack paper+shadow v1.0 congelato** – LOMS in **PAPER-SERVER** su Hetzner  
+(branch `feature/real-price-exit-2025-12`, tag `loms-paper-shadow-v1.0-2025-12-04`, profilo `ENVIRONMENT=paper`),  
+RickyBot in **Shadow Mode** con `LOMS_ENABLED=true` su Bitget/Bybit  
+(tag `rickybot-loms-v1.0-2025-12-02`, basato su `rickybot-pre-oms-tuning2-2025-11-30`),  
+**nessun ordine reale verso l’exchange**; Real Price Engine (PriceSource + ExitEngine + BrokerAdapterPaperSim)
+integrato lato codice e testato in **DEV** (Dummy/Bybit/Bitget), ma sul PAPER-SERVER è ancora attivo
+solo il profilo **PRICE_SOURCE=simulator**.)
 
 ---
 
@@ -20,9 +23,9 @@ rollback immediato.
 ## 1. Stato di partenza
 
 - [x] RickyBot Bounce EMA10 Strict stabile (tag pre-OMS / Tuning2).
-- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm”.
+- [x] RickyBot runner in produzione su Hetzner in modalità “stable farm” (Tuning2 su Bitget/Bybit 5m).
 - [x] LOMS FastAPI attivo in modalità **paper** (ordini, posizioni, TP/SL, auto-close).
-- [x] LOMS PAPER-SERVER in esecuzione su Hetzner, profilo `ENVIRONMENT=paper`.
+- [x] LOMS PAPER-SERVER in esecuzione su Hetzner, profilo `ENVIRONMENT=paper`, `BROKER_MODE=paper`.
 - [x] Integrazione RickyBot → LOMS testata end-to-end  
       (segnale reale → ordine/posizione paper in locale; ora Shadow Mode attiva anche su Hetzner).
 - [x] Su Hetzner, LOMS PAPER-SERVER ha già gestito posizioni di test
@@ -35,9 +38,18 @@ rollback immediato.
       `external_position_ref`, `exit_strategy`, `dynamic_tp_price`,
       `dynamic_sl_price`, `max_favorable_move`, `exit_meta`.
 - [x] Real Price Engine v1 integrato:
-      `PriceSource` (simulator/exchange), `PriceMode`, `PriceQuote`,
-      orchestrato da `auto_close_positions` tramite `ExitPolicy` (`StaticTpSlPolicy`);
-      su server Paper attuale usiamo ancora `PRICE_SOURCE=simulator` (no prezzi reali).
+      `PriceSource` (simulator/exchange/replay), `PriceMode`, `PriceQuote`,
+      orchestrato da `auto_close_positions` tramite `ExitPolicy` (`StaticTpSlPolicy`).
+      In DEV sono disponibili:
+      - `SimulatedPriceSource(MarketSimulator)`
+      - `ExchangePriceSource` con:
+        - `DummyExchangeHttpClient` (quote finte ~100),
+        - `BybitHttpClient` (REST `/v5/market/tickers`),
+        - `BitgetHttpClient` (REST `/api/v2/spot/market/tickers`),
+      e tool:
+      - `tools/test_exchange_price_source.py`
+      - `tools/test_exit_engine_real_price.py`.
+      Sul PAPER-SERVER attuale usiamo ancora **`PRICE_SOURCE=simulator`** (no prezzi reali).
 - [x] `BrokerAdapterPaperSim` operativo: apertura posizioni paper via
       `NewPositionParams` (symbol, side, qty, entry_price, exchange, market_type,
       account_label, tp_price, sl_price, exit_strategy="tp_sl_static").
@@ -48,11 +60,13 @@ rollback immediato.
 
 ### 2.1 Versioning & tag
 
-- [ ] Tag LOMS paper stabile (es. `loms-paper-shadow-2025-12-01` o simile).
-- [ ] Annotare nel README:
-  - [ ] tag RickyBot usato (es. `rickybot-pre-oms-tuning2-2025-11-30` o successivo),
-  - [ ] tag LOMS usato (es. `loms-paper-shadow-2025-12-01`),
-  - [ ] schema versioni (`v0.x-paper`, `v1.x-live`).
+- [x] Tag LOMS paper stabile creato (stack paper+shadow v1.0):  
+      `loms-paper-shadow-v1.0-2025-12-04` sul branch `feature/real-price-exit-2025-12`.
+- [x] Annotare nei documenti LOMS i tag dello stack paper+shadow:
+  - [x] tag RickyBot principale: `rickybot-loms-v1.0-2025-12-02`
+        (basato su `rickybot-pre-oms-tuning2-2025-11-30`),
+  - [x] tag LOMS paper: `loms-paper-shadow-v1.0-2025-12-04`,
+  - [x] schema versioni: `v0.x` = profili paper/shadow, `v1.x` = futuri profili live/semi-live.
 
 ### 2.2 Config dev vs paper-server
 
@@ -64,8 +78,10 @@ rollback immediato.
         - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`
         - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`
         - `OMS_ENABLED=true`
-        - `PRICE_SOURCE=exchange` (per test con `DummyExchangeHttpClient`)
+        - `PRICE_SOURCE=exchange`
         - `PRICE_MODE=last`
+        - `PRICE_EXCHANGE=dummy|bybit|bitget`
+        - `PRICE_HTTP_TIMEOUT` (timeout HTTP per Bybit/Bitget reali)
 
   - [x] **`PAPER-SERVER` (Hetzner)** – attualmente in uso:
         - `ENVIRONMENT=paper`
@@ -74,8 +90,9 @@ rollback immediato.
           (profilo attivo su `rickybot-01`)
         - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`
         - `OMS_ENABLED=true`
-        - `PRICE_SOURCE=simulator` (paper puro, nessun prezzo reale)
+        - `PRICE_SOURCE=simulator` (paper puro, nessun prezzo reale in auto_close)
         - `PRICE_MODE=last`
+        - `PRICE_EXCHANGE` ignorato (non entra in gioco finché PRICE_SOURCE=simulator)
 
 - [x] Allineare `.env.sample` con `Settings` (✅ 2025-11-30 + Real Price 2025-12-03):
   - [x] `ENVIRONMENT`
@@ -87,6 +104,9 @@ rollback immediato.
   - [x] `MAX_SIZE_PER_POSITION_USDT`
   - [x] `PRICE_SOURCE`
   - [x] `PRICE_MODE`
+  - [x] `PRICE_EXCHANGE`
+  - [x] `PRICE_HTTP_TIMEOUT`
+  - [x] `AUTO_CLOSE_INTERVAL_SEC`
 
 - [x] Documentare Quickstart dev nel README (venv + uvicorn + uso tools health/stats).
 
@@ -146,6 +166,36 @@ rollback immediato.
   - [x] logga `risk_block` con motivo,
   - [x] accetta `None` come “nessun limite” (se in futuro lo vorrai usare così).
 
+- 🔧 **Bug/override risolto – MAX_SIZE_PER_POSITION_USDT (DEV vs PAPER)**  
+  - In DEV c’era una variabile d’ambiente globale di sistema
+    `MAX_SIZE_PER_POSITION_USDT=10.0` che overrideava il valore di `.env`.
+  - Questo causava blocchi del tipo  
+    `max_size_per_position_exceeded (notional=100.0000, limit=10.0000)`
+    anche con `.env` a 1000.0.
+  - Fix fatto 2025-12-04:
+    - rimossa la env globale,
+    - Verifiche:
+
+      ```bash
+      # DEV locale (dentro venv, services/cryptonakcore)
+      python -c "from app.core.config import settings; \
+                 print('ENV=', settings.ENVIRONMENT, \
+                       'MAX_SIZE_PER_POSITION_USDT =', \
+                       settings.MAX_SIZE_PER_POSITION_USDT)"
+      # → ENV= dev MAX_SIZE_PER_POSITION_USDT = 100000.0 (profilo LAB)
+
+      # PAPER-SERVER (ssh, dentro venv, services/cryptonakcore)
+      ../../.venv/bin/python -c "from app.core.config import settings; \
+                 print('ENV=', settings.ENVIRONMENT, \
+                       'MAX_SIZE_PER_POSITION_USDT =', \
+                       settings.MAX_SIZE_PER_POSITION_USDT)"
+      # → ENV= paper MAX_SIZE_PER_POSITION_USDT = 1000.0
+      ```
+
+    - Dopo il fix:
+      - in DEV i test LAB con `tools/test_notify_loms.py` passano (`risk_ok=True`),
+      - sul server PAPER-SERVER il limite è effettivamente 1000.0 USDT.
+
 ### 3.2 Risk RickyBot (futuro)
 
 - [ ] Aggiungere in `.env` RickyBot (dev/live):
@@ -161,11 +211,14 @@ rollback immediato.
   - [x] `OMS_ENABLED` come kill-switch logico (se `false` → `/signals/bounce`
         non crea più ordini/posizioni).
 
-- [ ] Procedura emergenza:
-  - [ ] set `OMS_ENABLED=false` in env,
-  - [ ] restart LOMS,
-  - [ ] stop runner RickyBot se necessario.
-- [ ] Nota esplicita in README: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange.
+- [x] Procedura emergenza (panic button documentata in Pre-Live Roadmap / LOMS_CHECKLIST):
+  - [x] set `OMS_ENABLED=false` in `.env` LOMS,
+  - [x] restart LOMS (`uvicorn` / tmux `loms-paper`),
+  - [x] stop runner RickyBot se necessario (sessioni tmux bot) per evitare nuovi segnali.
+
+- [x] Regola esplicita in doc: con `BROKER_MODE=paper` **mai** ordini reali verso l’exchange,  
+      anche quando esisterà un `BrokerAdapterExchange*`.  
+      Il PAPER-SERVER usa solo `BrokerAdapterPaperSim` + `PRICE_SOURCE=simulator`.
 
 ---
 
@@ -200,7 +253,7 @@ rollback immediato.
     - [ ] `Service status` sia `ok`,
     - [ ] `Environment` e `Broker mode` siano quelli attesi (`dev` / `paper`),
     - [ ] `price_source` / `price_mode` abbiano i valori previsti
-          (es. `simulator/last` sul server paper).
+          (es. `simulator/last` sul server paper, `exchange/last` in DEV).
 - [ ] **Stats di partenza sensate**
   - [ ] Eseguire `python tools/print_stats.py`.
   - [ ] Verificare almeno:
@@ -249,8 +302,8 @@ rollback immediato.
   - [x] parametri vicini ai futuri semi-live (GAINERS_PERP 5m, Tuning2),
   - [x] `LOMS_ENABLED=true`,
   - [x] `BROKER_MODE=paper`.
-- [ ] Lasciare girare per N giorni (es. 5–10)  
-      _(in corso: Shadow Mode su Hetzner avviata il 2025-12-01, in farm continua)._
+- [x] Lasciare girare per N giorni (es. 5–10)  
+      _(in corso: Shadow Mode su Hetzner avviata il 2025-12-01, ora in farm continua)._  
 
 ### 5.2 Analisi Shadow
 
@@ -307,12 +360,14 @@ rollback immediato.
 
 ## 8. Prossimi micro-step consigliati
 
-- [ ] Tag LOMS paper + aggiornamento README / LOMS_CHECKLIST (Fase 2.1).
+- [x] Tag LOMS paper + aggiornamento doc stack paper+shadow (Fase 2.1).  
+      (✅ `loms-paper-shadow-v1.0-2025-12-04` creato e referenziato in  
+      LOMS_CHECKLIST_MASTER + PRE_LIVE_ROADMAP + questa checklist.)
 - [x] Definire meglio profili `DEV` vs `PAPER-SERVER`  
-      (✅ fatto 2025-12-01, profilo PAPER-SERVER attivo su Hetzner con Shadow Mode).
+      (✅ fatto: profili documentati, con Real Price solo in DEV e simulator su PAPER-SERVER).
 - [x] Integrare `MAX_SIZE_PER_POSITION_USDT` nel risk engine  
-      (✅ fatto 2025-11-30, vedi sezione 3.1).
+      (✅ fatto, con bugfix override env e verifica su DEV e PAPER-SERVER).
 - [x] Avviare una prima Shadow Mode (locale + server)  
-      (✅ locale già testata; ✅ Shadow Mode su Hetzner attiva dal 2025-12-01). 
+      (✅ locale già testata; ✅ Shadow Mode su Hetzner attiva dal 2025-12-01).
 - [ ] Lasciare girare Shadow Mode per N giorni e fare una prima review di `/stats`
       prima di pensare al semi-live 100€.
