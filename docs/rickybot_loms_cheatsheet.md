@@ -1,4 +1,4 @@
-# RickyBot + LOMS – Cheatsheet 2col (v9 – 2025-12-02)
+# RickyBot + LOMS – Cheatsheet 2col (v9 – 2025-12-04)
 
 LOCALE / DEV (Windows)                          SERVER / PROD (Hetzner – RickyBot + LOMS)
 ==========================================================================================
@@ -20,6 +20,13 @@ Preambolo – Stato attuale (Shadow Mode agganciata)
   - `OMS_ENABLED = true`
   - DB: `services/cryptonakcore/data/loms_paper.db`
   - Audit: `services/cryptonakcore/data/bounce_signals_paper.jsonl`
+  - Price engine:
+    - `PRICE_SOURCE = simulator`
+    - `PRICE_MODE   = last`
+  - Risk limits PAPER:
+    - `MAX_OPEN_POSITIONS`             (es. 5)
+    - `MAX_OPEN_POSITIONS_PER_SYMBOL`  (es. 2)
+    - `MAX_SIZE_PER_POSITION_USDT = 1000.0` (confermato via `Settings` nella venv server)
 
 - **RickyBot + Shadow Mode (server)**
   - RickyBot gira con Tuning2 su Bitget/Bybit 5m (GAINERS_PERP).
@@ -35,7 +42,7 @@ Preambolo – Stato attuale (Shadow Mode agganciata)
   1. RickyBot trova un pattern Bounce EMA10 Strict (Tuning2) su 5m.
   2. Manda l’alert su Telegram (come sempre).
   3. Se `LOMS_ENABLED=true`, chiama il `loms_client` → `POST /signals/bounce` su LOMS.
-  4. LOMS controlla i limiti di rischio, crea ordine + posizione paper e il MarketSimulator chiude TP/SL dopo ~7s.
+  4. LOMS controlla i limiti di rischio, crea ordine + posizione paper e il MarketSimulator chiude TP/SL dopo ~7s (PAPER-SERVER) o il PriceSource chiude secondo il profilo DEV.
   5. Vedi il risultato su:
      - `/positions` (lista posizioni),
      - `/stats` (winrate, tp/sl count, ecc.).
@@ -50,11 +57,21 @@ Preambolo – Stato attuale (Shadow Mode agganciata)
 
 - 📌 **Nota Real Price (DEV vs PAPER-SERVER)**  
   - **DEV locale (Windows)**  
-    - `PRICE_SOURCE=exchange` con **DummyExchangeHttpClient`**  
-    - Le posizioni paper usano già il nuovo percorso **Real Price / ExitEngine** (PriceSource + ExitPolicy),  
-      ma le quote sono ancora **finte** (client HTTP dummy, nessun contatto reale con Bitget/Bybit).  
+    - `ENVIRONMENT=dev`, `BROKER_MODE=paper`, `OMS_ENABLED=True`.
+    - `PRICE_SOURCE=exchange` con `PRICE_EXCHANGE` selezionabile:
+      - `dummy`  → `DummyExchangeHttpClient` (quote finte ~100, per test generale),
+      - `bybit`  → `BybitHttpClient` (REST pubblico `/v5/market/tickers`),
+      - `bitget` → `BitgetHttpClient` (REST pubblico `/api/v2/spot/market/tickers`).
+    - In DEV usi i tool:
+      - `tools/test_exchange_price_source.py` → verifica il client (Dummy/Bybit/Bitget) e le quote reali BTCUSDT.
+      - `tools/test_exit_engine_real_price.py` → testa `StaticTpSlPolicy` con **prezzo reale** (TP/SL ±0.5%).
+    - Risk DEV:
+      - `MAX_SIZE_PER_POSITION_USDT` può essere messo alto (es. `100000.0`) nel `.env` DEV per test LAB.
+      - Verifica sempre il valore **reale** da `Settings` (vedi sezione B3).
   - **PAPER-SERVER (Hetzner)**  
-    - `PRICE_SOURCE=simulator`  
+    - `ENVIRONMENT=paper`, `BROKER_MODE=paper`, `OMS_ENABLED=True`.
+    - `PRICE_SOURCE=simulator` (paper puro), `PRICE_MODE=last`.
+    - `MAX_SIZE_PER_POSITION_USDT = 1000.0` (valore realistico confermato lato server).
     - LOMS lavora ancora con **MarketSimulator v2** per TP/SL (paper puro),  
       mentre ascolta comunque tutti i segnali reali da RickyBot in Shadow Mode.
 
@@ -280,6 +297,19 @@ dir services\cryptonakcore\data               ls services/cryptonakcore/data
 # loms_dev.db                                  # loms_paper.db
 # bounce_signals_dev.jsonl                     # bounce_signals_paper.jsonl
 
+Verifica rapida MAX_SIZE_PER_POSITION_USDT     Verifica rapida MAX_SIZE_PER_POSITION_USDT
+(DEV, dentro venv)                             (SERVER, dentro venv server)
+----------------------------------------        ------------------------------------------
+cd C:\Projects\cryptonakcore-loms             cd ~/cryptonakcore-loms/services/cryptonakcore
+& .\.venv\Scripts\Activate.ps1                ../../.venv/bin/python -c \
+cd services\cryptonakcore                        "from app.core.config import settings; \
+python -c "from app.core.config import            print('ENV=', settings.ENVIRONMENT, \
+settings; print('ENV=', settings.ENVIRONMENT,      'MAX_SIZE_PER_POSITION_USDT =', \
+'MAX_SIZE_PER_POSITION_USDT =',                   settings.MAX_SIZE_PER_POSITION_USDT)"
+settings.MAX_SIZE_PER_POSITION_USDT)"         # Output atteso:
+# Output DEV atteso per LAB:                     # ENV= paper MAX_SIZE_PER_POSITION_USDT = 1000.0
+# ENV= dev MAX_SIZE_PER_POSITION_USDT = 100000.0
+
 
 B4) TEST INTEGRAZIONE RICKYBOT → LOMS         B4) SHADOW MODE (SERVER)
 ----------------------------------------        ------------------------------------------
@@ -316,6 +346,38 @@ Copy-Item services\cryptonakcore\data\* `     mv services/cryptonakcore/data/lom
                                               # riavvia uvicorn in tmux: loms-paper
 
 
+B6) REAL PRICE & EXITENGINE – TEST TOOLS (DEV ONLY)
+----------------------------------------        ------------------------------------------
+Test PriceSource con Dummy/Bybit/Bitget       (nessun equivalente sul server – PAPER-SERVER
+----------------------------------------        resta su PRICE_SOURCE=simulator)
+cd C:\Projects\cryptonakcore-loms
+& .\.venv\Scripts\Activate.ps1
+# Assicurati in services/cryptonakcore/.env:
+#  ENVIRONMENT=dev
+#  BROKER_MODE=paper
+#  PRICE_SOURCE=exchange
+#  PRICE_MODE=last
+#  PRICE_EXCHANGE=dummy|bybit|bitget
+python tools\test_exchange_price_source.py
+# Output: ENV, BROKER_MODE, PRICE_SOURCE, PRICE_MODE,
+#         PRICE_EXCHANGE, PRICE_HTTP_TIMEOUT + quote BTCUSDT
+#         (Dummy = ~100; Bybit/Bitget = prezzo reale)
+
+Test StaticTpSlPolicy con prezzo reale
+----------------------------------------
+# Con PRICE_EXCHANGE=bybit o bitget:
+python tools\test_exit_engine_real_price.py
+# Mostra:
+#  - [REAL]  price=current_price   -> di solito "no action"
+#  - [HIT_TP] price=tp_price      -> CLOSE_POSITION (reason=tp)
+#  - [HIT_SL] price=sl_price      -> CLOSE_POSITION (reason=sl)
+# Serve per verificare localmente la catena:
+#  PriceSource(EXCHANGE) -> PriceQuote -> ExitContext(price)
+#  -> StaticTpSlPolicy -> ExitAction(CLOSE_POSITION)
+
+------------------------------------------------------------------------------------------
+
+
 C) MINI CHECKLIST SHADOW MODE                  C) MINI CHECKLIST SHADOW MODE (SERVER)
 (LOCALE / DEV)                                ------------------------------------------
 ----------------------------------------
@@ -323,6 +385,7 @@ C) MINI CHECKLIST SHADOW MODE                  C) MINI CHECKLIST SHADOW MODE (SE
    - `uvicorn app.main:app --reload`             - loms-paper
    - `python tools\check_health.py`              - rickybot-bitget
    - Environment=dev, Broker=paper               - rickybot-bybit
+   - OMS_ENABLED=True
 
 2. RickyBot DEV attivo                        2. python tools/check_health.py
    - `python -m bots.rickybot --top 5`           - Environment=paper, Broker=paper, OMS_ENABLED=True
