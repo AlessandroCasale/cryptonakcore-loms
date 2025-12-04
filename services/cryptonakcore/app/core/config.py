@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # tipo MAX_SIZE_PER_POSITION_USDT=10.0 lasciate in giro.
     # LOMS userà SOLO LOMS_MAX_SIZE_PER_POSITION_USDT.
     MAX_SIZE_PER_POSITION_USDT: float = Field(
-        1000.0,
+        100000.0,
         env="LOMS_MAX_SIZE_PER_POSITION_USDT",
     )  # size massima per posizione (paper)
 
@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     PRICE_SOURCE: PriceSourceType = PriceSourceType.SIMULATOR
     # Quale campo del quote usare: last | bid | ask | mid | mark
     PRICE_MODE: PriceMode = PriceMode.LAST
+
+    # Exchange HTTP client per il Real Price Engine
+    # dummy  -> DummyExchangeHttpClient (test / dev)
+    # bybit  -> BybitHttpClient reale (REST /v5/market/tickers)
+    PRICE_EXCHANGE: str = "dummy"
+
+    # Timeout HTTP (in secondi) per le chiamate all'exchange reale
+    PRICE_HTTP_TIMEOUT: float = 3.0
 
     # Scheduler / auto-close watcher
     AUTO_CLOSE_INTERVAL_SEC: int = 1
@@ -72,13 +80,23 @@ class Settings(BaseSettings):
 
     @property
     def price_source(self) -> PriceSourceType:
-        """Alias lower-case per l'uso interno /health ecc."""
+        """Alias per l'uso interno /health ecc."""
         return self.PRICE_SOURCE
 
     @property
     def price_mode(self) -> PriceMode:
-        """Alias lower-case per l'uso interno /health ecc."""
+        """Alias per l'uso interno /health ecc."""
         return self.PRICE_MODE
+
+    @property
+    def price_exchange(self) -> str:
+        """Alias lower-case per scegliere il client HTTP (dummy / bybit)."""
+        return self.PRICE_EXCHANGE
+
+    @property
+    def price_http_timeout(self) -> float:
+        """Alias per il timeout HTTP (secondi)."""
+        return self.PRICE_HTTP_TIMEOUT
 
 
 settings = Settings()

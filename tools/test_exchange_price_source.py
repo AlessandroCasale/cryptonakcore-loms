@@ -1,64 +1,95 @@
 # tools/test_exchange_price_source.py
-
 from __future__ import annotations
 
 import sys
-from dataclasses import asdict
 from pathlib import Path
+from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Bootstrap: aggiungi `services/cryptonakcore` al sys.path
-# così il package `app` è importabile quando lanci da root del repo.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------
+# Setup sys.path per importare "app.*"
+# --------------------------------------------------
+ROOT = Path(__file__).resolve().parents[1]  # C:\Projects\cryptonakcore-loms
+SERVICE_ROOT = ROOT / "services" / "cryptonakcore"
+if str(SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVICE_ROOT))
 
-ROOT_DIR = Path(__file__).resolve().parent          # .../cryptonakcore-loms/tools
-REPO_ROOT = ROOT_DIR.parent                         # .../cryptonakcore-loms
-APP_DIR = REPO_ROOT / "services" / "cryptonakcore"  # .../services/cryptonakcore
-
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
-
-# Ora possiamo importare `app.*` normalmente
 from app.core.config import settings
-from app.services.pricing import (
-    PriceMode,
-    PriceSourceType,
-    PriceQuote,
+from app.services.exchange_client import (
     ExchangePriceSource,
-    select_price,
+    DummyExchangeHttpClient,
+    BybitHttpClient,
+    BitgetHttpClient,
 )
+from app.services.pricing import PriceMode, PriceQuote
 
 
-class DummyExchangeClient:
+def _detect_client_name(src: ExchangePriceSource) -> str:
+    client = getattr(src, "_client", None)
+    if isinstance(client, BybitHttpClient):
+        return "Bybit client"
+    if isinstance(client, BitgetHttpClient):
+        return "Bitget client"
+    if isinstance(client, DummyExchangeHttpClient):
+        return "Dummy client"
+    return client.__class__.__name__ if client is not None else "Unknown client"
+
+
+def _select_price_for_report(quote: PriceQuote) -> Optional[float]:
     """
-    Client finto che emula la risposta di un exchange HTTP.
-
-    Serve solo per testare ExchangePriceSource senza dipendere
-    da Bitget/Bybit reali.
+    Mini helper solo per questo tool, per mostrare il prezzo scelto
+    in base a settings.price_mode. Non tocca la logica reale dell'ExitEngine.
     """
+    mode = settings.price_mode
 
-    def get_ticker(self, symbol: str) -> dict:
-        return {
-            "symbol": symbol,
-            "bid": 99.5,
-            "ask": 100.5,
-            "last": 100.0,
-            "mark": 100.2,
-        }
+    v_last = quote.last
+    v_bid = quote.bid
+    v_ask = quote.ask
+    v_mark = quote.mark
+
+    mv = getattr(mode, "value", str(mode))
+
+    if mv == "last":
+        return v_last
+    if mv == "bid":
+        return v_bid
+    if mv == "ask":
+        return v_ask
+    if mv == "mark":
+        return v_mark
+    if mv == "mid":
+        if v_bid is not None and v_ask is not None:
+            return (v_bid + v_ask) / 2
+
+    # Fallback ultra-semplice
+    return v_last or v_mark or v_bid or v_ask
 
 
-def print_header() -> None:
+def main() -> None:
+    symbol = "BTCUSDT"
+
+    # Usa la factory interna: sceglie Dummy / Bybit / Bitget in base alle Settings
+    src = ExchangePriceSource()
+    client_name = _detect_client_name(src)
+
     print("==============================================")
-    print(" ExchangePriceSource test (Dummy client)")
+    print(f" ExchangePriceSource test ({client_name})")
     print("==============================================")
-    print(f"ENVIRONMENT   : {settings.environment}")
-    print(f"BROKER_MODE   : {settings.broker_mode}")
-    print(f"PRICE_SOURCE  : {settings.price_source}")
-    print(f"PRICE_MODE    : {settings.price_mode}")
+    print(f"ENVIRONMENT        : {settings.environment}")
+    print(f"BROKER_MODE        : {settings.broker_mode}")
+    print(f"PRICE_SOURCE       : {settings.price_source}")
+    print(f"PRICE_MODE         : {settings.price_mode}")
+    print(f"PRICE_EXCHANGE     : {settings.price_exchange}")
+    print(f"PRICE_HTTP_TIMEOUT : {settings.price_http_timeout}")
     print()
 
+    quote = src.get_quote(symbol)
 
-def print_quote(symbol: str, quote: PriceQuote) -> None:
+    mid = (
+        (quote.bid + quote.ask) / 2
+        if quote.bid is not None and quote.ask is not None
+        else None
+    )
+
     print(f"Quote for {symbol}:")
     print(f"  symbol   : {quote.symbol}")
     print(f"  ts       : {quote.ts}")
@@ -68,23 +99,11 @@ def print_quote(symbol: str, quote: PriceQuote) -> None:
     print(f"  ask      : {quote.ask}")
     print(f"  last     : {quote.last}")
     print(f"  mark     : {quote.mark}")
-    print(f"  mid      : {quote.mid}")
+    print(f"  mid      : {mid}")
     print()
 
-
-def main() -> None:
-    symbol = "BTCUSDT"
-
-    print_header()
-
-    client = DummyExchangeClient()
-    src = ExchangePriceSource(client)
-
-    quote: PriceQuote = src.get_quote(symbol)
-    print_quote(symbol, quote)
-
-    price = select_price(quote, settings.price_mode)
-    print(f"select_price(mode={settings.price_mode!r}) -> {price}")
+    selected = _select_price_for_report(quote)
+    print(f"select_price(mode={settings.price_mode}) -> {selected}")
     print("==============================================")
     print(" Fine test ExchangePriceSource")
     print("==============================================")

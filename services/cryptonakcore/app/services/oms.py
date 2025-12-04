@@ -111,7 +111,31 @@ def check_risk_limits(
 
     max_total = settings.MAX_OPEN_POSITIONS
     max_per_symbol = settings.MAX_OPEN_POSITIONS_PER_SYMBOL
-    max_size_usdt = settings.MAX_SIZE_PER_POSITION_USDT
+
+    # Valore “grezzo” letto da settings (quello che oggi ci sta dando 10.0 nel server)
+    raw_max_size_usdt = settings.MAX_SIZE_PER_POSITION_USDT
+
+    # Ambiente logico (dev / paper / live ...)
+    env_name = getattr(settings, "ENVIRONMENT", "dev").lower()
+
+    # 🔧 Decisione: in DEV non blocchiamo mai per notional.
+    # Il limite di size resta valido solo per profili paper/live.
+    if env_name == "dev":
+        max_size_usdt = None
+    else:
+        max_size_usdt = raw_max_size_usdt
+
+    # Log di diagnostica una volta per chiamata
+    logger.info(
+        {
+            "event": "risk_limits_snapshot",
+            "env": env_name,
+            "max_total": max_total,
+            "max_per_symbol": max_per_symbol,
+            "max_size_usdt": max_size_usdt,
+            "raw_max_size_usdt": raw_max_size_usdt,
+        }
+    )
 
     # Tutte le posizioni aperte
     base_q = db.query(Position).filter(Position.status == "open")
@@ -152,7 +176,7 @@ def check_risk_limits(
         )
         return False, reason
 
-    # Controllo limite di size (notional) per posizione, se abbiamo i dati necessari
+    # Controllo limite di size (notional) per posizione, SOLO se il limite è attivo
     if (
         max_size_usdt is not None
         and max_size_usdt > 0
@@ -182,6 +206,7 @@ def check_risk_limits(
 
     # Tutto ok, si può aprire
     return True, None
+
 
 
 def handle_bounce_signal(db: Session, signal) -> dict:
