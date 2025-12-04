@@ -1,11 +1,12 @@
 # CryptoNakCore LOMS – Pre-Live Roadmap (100€ semi-live)
 
-Versione aggiornata – **2025-12-03**  
-(Stato: LOMS **PAPER-SERVER** attivo su Hetzner, `MAX_SIZE_PER_POSITION_USDT`
-integrato nel risk engine, Real Price Engine (PriceSource + PriceMode + ExitPolicy)
-agganciato in codice, health tool e `.env.sample` allineati, logging & retention
-mappati, Shadow Mode RickyBot→LOMS agganciata con primi trade paper BTCUSDT
-chiusi TP/SL – 36 posizioni chiuse, winrate ~58%)
+Versione aggiornata – **2025-12-04**  
+(Stato: LOMS **PAPER-SERVER** attivo su Hetzner (branch `feature/real-price-exit-2025-12`, profilo `ENVIRONMENT=paper`),
+`MAX_SIZE_PER_POSITION_USDT` integrato nel risk engine **con bug override env risolto**
+(verificato DEV vs PAPER-SERVER), Real Price Engine (PriceSource + PriceMode + ExitPolicy
++ BrokerAdapterPaperSim) agganciato in codice e testato in **DEV** con Dummy/Bybit/Bitget,
+health tool e `.env.sample` allineati, logging & retention mappati, Shadow Mode RickyBot→LOMS
+agganciata con primi trade paper BTCUSDT/altro chiusi TP/SL – ~36 posizioni chiuse, winrate ~58%)
 
 Obiettivo: preparare la coppia **RickyBot + CryptoNakCore LOMS** a un test
 **semi-live con 100€** su Bitget, con rischio ultra-limitato e possibilità di
@@ -23,7 +24,8 @@ prima di anche solo pensarci.
 - LOMS in modalità **PAPER-SERVER** su Hetzner  
   (`ENVIRONMENT=paper`, `BROKER_MODE=paper`, `OMS_ENABLED=true`).
 - Risk engine lato LOMS con **3 limiti**  
-  (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`, `MAX_SIZE_PER_POSITION_USDT`).
+  (`MAX_OPEN_POSITIONS`, `MAX_OPEN_POSITIONS_PER_SYMBOL`, `MAX_SIZE_PER_POSITION_USDT`),
+  con override di env globale **corretto** (DEV e PAPER-SERVER leggono i valori attesi da `.env`).
 - Integrazione **RickyBot → LOMS** attiva in **Shadow Mode**:
   - ogni alert reale di Bounce EMA10 Strict viene inviato anche a LOMS (paper).
 - `/health` e `/stats` funzionanti, con tool CLI  
@@ -37,18 +39,30 @@ prima di anche solo pensarci.
 - Real Price Engine v1 integrato:
   - `PriceSourceType` (simulator/exchange/replay),
   - `PriceQuote` + `select_price(quote, mode)`,
-  - `PRICE_SOURCE` / `PRICE_MODE` in Settings,
+  - `PRICE_SOURCE` / `PRICE_MODE` / `PRICE_EXCHANGE` / `PRICE_HTTP_TIMEOUT` in Settings,
   - orchestrazione in `auto_close_positions` tramite `StaticTpSlPolicy` (ExitPolicy),
-  - su PAPER-SERVER attuale usiamo ancora `PRICE_SOURCE=simulator` (niente prezzi reali in produzione).
+  - in **DEV**:
+    - `SimulatedPriceSource(MarketSimulator)`,
+    - `ExchangePriceSource` con:
+      - `DummyExchangeHttpClient` (quote finte ~100),
+      - `BybitHttpClient` (REST `/v5/market/tickers`),
+      - `BitgetHttpClient` (REST `/api/v2/spot/market/tickers`),
+    - tool:
+      - `tools/test_exchange_price_source.py`
+      - `tools/test_exit_engine_real_price.py`.
+  - su PAPER-SERVER attuale usiamo ancora **`PRICE_SOURCE=simulator`** (niente prezzi reali in produzione).
 - `BrokerAdapterPaperSim` operativo:
   - apertura posizioni paper tramite `NewPositionParams`
     (symbol, side, qty, entry_price, exchange, market_type, account_label,
     tp_price, sl_price, exit_strategy="tp_sl_static"),
   - già usato da `handle_bounce_signal` per creare `Position` da segnali Bounce.
+- Tag ufficiale stack **paper+shadow v1.0**:
+  - RickyBot: `rickybot-loms-v1.0-2025-12-02`
+  - LOMS: `loms-paper-shadow-v1.0-2025-12-04`  
+    (tag annotati in `LOMS_CHECKLIST_MASTER`, sezione Versioning).
 
 **⬜ Mancante / bloccante per il semi-live 100€:**
 
-- Tag **ufficiale** LOMS paper (es. `loms-paper-shadow-2025-12-01`) creato e annotato.
 - Parametri **risk lato RickyBot** (`RISK_MAX_ALERTS_PER_DAY`, ecc.) e loro utilizzo nel runner.
 - Regole di **kill switch** formalizzate e documentate (BROKER_MODE, OMS_ENABLED, procedura d’emergenza).
 - Preparazione **sub-account** dedicato con 100€ e API key limitate.
@@ -70,7 +84,7 @@ prima di anche solo pensarci.
   - client HTTP `loms_client.py`,
   - `notify_bounce_alert` che manda sia Telegram che LOMS,
   - flag `LOMS_ENABLED`, `LOMS_BASE_URL`.
-- Su Hetzner, branch con Tuning2 + LOMS client in **Shadow Mode**:
+- Su Hetzner, main + LOMS client in **Shadow Mode**:
   ogni alert reale viene inviato anche a LOMS in modalità paper.
 
 ### A2. LOMS
@@ -78,12 +92,12 @@ prima di anche solo pensarci.
 - Servizio FastAPI `cryptonakcore-loms` con:
   - OMS paper completo (ordini, posizioni, TP/SL, `auto_close_positions`).
   - Real Price Engine v1 integrato (PriceSource + PriceMode + ExitPolicy),
-    usato in dev con DummyExchange, ma su server PAPER-SERVER ancora in
+    usato in dev con Dummy/Bybit/Bitget, ma su server PAPER-SERVER ancora in
     modalità `PRICE_SOURCE=simulator`.
   - `/stats` + `tools/print_stats.py` funzionanti.
   - `/health` + `tools/check_health.py` funzionanti
     (inclusi `environment`, `broker_mode`, `oms_enabled`,
-    `DATABASE_URL`, `AUDIT_LOG_PATH` e, in dev, i campi prezzo).
+    `DATABASE_URL`, `AUDIT_LOG_PATH` e, in dev, i campi prezzo/PriceSource).
 - Ambiente **DEV** locale funziona.
 - Ambiente **PAPER-SERVER** attivo su Hetzner:
   - `ENVIRONMENT=paper`
@@ -95,7 +109,7 @@ prima di anche solo pensarci.
   - `PRICE_MODE=last`
 - Su Hetzner sono già state aperte e chiuse almeno 36 posizioni di test
   (es. BTCUSDT + altri simboli) con TP/SL, verificate via `/positions` e
-  `tools/print_stats.py`.
+  `tools/print_stats.py` (winrate ~58%).
 - Tutto gira **solo in modalità paper** (nessun ordine reale).
 
 ---
@@ -107,12 +121,12 @@ prima di anche solo pensarci.
 
 ### B1. Versioning & tag
 
-- [ ] Taggare una versione paper stabile di LOMS  
-      _(nome tag proposto: `loms-paper-shadow-2025-12-01`, da creare quando il repo è pulito)_.
-- [ ] Annotare nel README:
-  - [ ] tag RickyBot usato,
-  - [ ] tag LOMS usato,
-  - [ ] schema delle versioni (es. `v0.x-paper`, `v1.x-live`).
+- [x] Taggare una versione paper stabile di LOMS  
+      _(tag creato: `loms-paper-shadow-v1.0-2025-12-04`, associato al commit `bc90e71` sul branch `feature/real-price-exit-2025-12`)._
+- [x] Annotare nella documentazione (LOMS_CHECKLIST_MASTER + roadmap):
+  - [x] tag RickyBot usato (`rickybot-loms-v1.0-2025-12-02`),
+  - [x] tag LOMS usato (`loms-paper-shadow-v1.0-2025-12-04`),
+  - [x] schema delle versioni (es. `v0.x-paper`, `v1.x-live`, `v2.x+`).
 
 ---
 
@@ -126,8 +140,10 @@ prima di anche solo pensarci.
     - `DATABASE_URL=sqlite:///./services/cryptonakcore/data/loms_dev.db`  
     - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_dev.jsonl`  
     - `OMS_ENABLED=true`  
-    - `PRICE_SOURCE=exchange` (per test con DummyExchange in locale)  
-    - `PRICE_MODE=last`
+    - `PRICE_SOURCE=exchange` (per test con Dummy/Bybit/Bitget in locale)  
+    - `PRICE_MODE=last`  
+    - `PRICE_EXCHANGE=dummy|bybit|bitget`  
+    - `PRICE_HTTP_TIMEOUT` per client reali
 
   - **`PAPER-SERVER` (Hetzner)** – **profilo attuale**
     - `ENVIRONMENT=paper`  
@@ -136,7 +152,7 @@ prima di anche solo pensarci.
     - `AUDIT_LOG_PATH=services/cryptonakcore/data/bounce_signals_paper.jsonl`  
     - `OMS_ENABLED=true`  
     - `PRICE_SOURCE=simulator`  
-    - `PRICE_MODE=last`
+    - `PRICE_MODE=last`  
 
 - [x] Aggiungere a `services/cryptonakcore/.env.sample` i campi minimi  
       *(✅ fatto 2025-11-30 + Real Price 2025-12-03)*:
@@ -149,6 +165,9 @@ prima di anche solo pensarci.
         `MAX_SIZE_PER_POSITION_USDT`)
   - [x] `PRICE_SOURCE`
   - [x] `PRICE_MODE`
+  - [x] `PRICE_EXCHANGE`
+  - [x] `PRICE_HTTP_TIMEOUT`
+  - [x] `AUTO_CLOSE_INTERVAL_SEC`
 
 - [x] Documentare nel README come lanciare in dev (venv + uvicorn, sezione Quickstart)  
   *(profilo server dettagliato in LOMS_CHECKLIST + runbook Hetzner).*
@@ -215,8 +234,14 @@ prima di anche solo pensarci.
   - [x] `MAX_OPEN_POSITIONS_PER_SYMBOL`
   - [x] `MAX_SIZE_PER_POSITION_USDT`
 - [x] Aggiornare il risk engine per usare questi parametri  
-      *(✅ `check_risk_limits` usa tutti e tre e accetta anche `None` = nessun limite)*.
+      *(✅ `check_risk_limits` usa tutti e tre e accetta anche `None` = nessun limite).*  
 - [x] Loggare chiaramente i blocchi (`risk_block` con motivi, scope `"total"`, `"symbol"`, `"size"`).
+- [x] **Bug override env risolto (2025-12-04)**:
+  - in DEV esisteva una env di sistema `MAX_SIZE_PER_POSITION_USDT=10.0` che overrideava `.env`;
+  - è stata rimossa, e verificato che:
+    - DEV: `ENV=dev MAX_SIZE_PER_POSITION_USDT = 100000.0` (profilo LAB),
+    - PAPER-SERVER: `ENV=paper MAX_SIZE_PER_POSITION_USDT = 1000.0`;
+  - i test con `tools/test_notify_loms.py` confermano `risk_ok=True` quando notional ≤ limite.
 
 ### C2. Parametri risk lato RickyBot  **(TODO – pre-100€)**
 
@@ -233,12 +258,35 @@ prima di anche solo pensarci.
         ed esposto in `/health` → visibile con `tools/check_health.py`).
 - [x] Usare `OMS_ENABLED` come kill-switch logico  
       (se `false` → `/signals/bounce` non crea ordini/posizioni).
-- [ ] Definire una regola chiara: se `BROKER_MODE=paper` → **nessun** ordine verso exchange
-      reale anche in futuro (anche quando esisterà un adapter reale).
-- [ ] Documentare una procedura di emergenza:
-  - [ ] edit `.env` → `OMS_ENABLED=false`,
-  - [ ] restart servizio LOMS,
-  - [ ] stop runner RickyBot se necessario.
+- [x] Definire una regola chiara:
+
+  - `BROKER_MODE=paper`  
+    - LOMS deve usare **solo** `BrokerAdapterPaperSim` / simulazione.
+    - Anche se esiste un `BrokerAdapterExchange*` reale, **non deve mai** essere chiamato in questo profilo.
+    - Profilo usato per DEV e PAPER-SERVER (Shadow Mode, nessun ordine reale).
+
+  - `BROKER_MODE=live`  
+    - LOMS deve usare **solo** `BrokerAdapterExchange*` verso sub-account reale.
+    - Richiede sempre:
+      - sub-account dedicato (es. Bitget 100€),
+      - fondi limitati e separati,
+      - API key con permessi SOLO trading (no withdraw).
+
+- [x] Documentare una procedura di emergenza (“panic button”):
+
+  1. Su PAPER-SERVER, editare `.env` e impostare `OMS_ENABLED=false`.
+  2. Riavviare il servizio LOMS:
+     - entrare nella sessione tmux `loms-paper`,
+     - interrompere `uvicorn` (CTRL+C),
+     - rilanciare `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+  3. Fermare il runner RickyBot:
+     - sessioni tmux `rickybot-bitget` e `rickybot-bybit`,
+     - CTRL+C in ciascuna sessione per fermare il bot.
+  4. Verificare che non ci siano posizioni aperte:
+     - `python tools/print_stats.py` → `open_positions = 0`,
+     - `/positions` (o `curl .../positions/ | python -m json.tool`) → nessuna `status="open"`,
+     - controllare il sub-account Bitget da app/sito → nessuna posizione aperta.
+  5. Solo dopo aver verificato che tutto è chiuso, valutare eventuale riavvio in modalità paper o debug.
 
 ---
 
@@ -312,43 +360,43 @@ Shadow Mode = stesso flusso di segnali di domani, ma ordini solo paper,
 mentre eventualmente fai ancora trading manuale per confronto.
 
 E1. Setup shadow
- Avviare LOMS su una macchina “vicina” all’ambiente reale (Hetzner rickybot-01).
+Avviare LOMS su una macchina “vicina” all’ambiente reale (Hetzner rickybot-01).
 (Fatto: PAPER-SERVER attivo dal 2025-12-01)
 
- Configurare RickyBot con:
+Configurare RickyBot con:
 
- parametri vicini ai futuri semi-live
+parametri vicini ai futuri semi-live
 (Bitget/Bybit PERP 5m, Tuning2),
 
- LOMS_ENABLED=true,
+LOMS_ENABLED=true,
 
- LOMS_BASE_URL=http://127.0.0.1:8000,
+LOMS_BASE_URL=http://127.0.0.1:8000,
 
- BROKER_MODE=paper lato LOMS.
+BROKER_MODE=paper lato LOMS.
 
 [🟡] Lasciare girare per almeno N giorni (es. 5–10).
 (Shadow Mode server avviata il 2025-12-01, run in corso con Tuning2+LOMS.)
 
 E2. Analisi risultati shadow
- Raccogliere /stats a fine giornata (via tools/print_stats.py).
+Raccogliere /stats a fine giornata (via tools/print_stats.py).
 
- Controllare:
+Controllare:
 
- winrate,
+winrate,
 
- max drawdown simulato,
+max drawdown simulato,
 
- numero medio di operazioni/giorno,
+numero medio di operazioni/giorno,
 
- distribuzione TP vs SL.
+distribuzione TP vs SL.
 
- Definire una soglia di “OK per semi-live”, per esempio:
+Definire una soglia di “OK per semi-live”, per esempio:
 
- winrate ≥ X%,
+winrate ≥ X%,
 
- drawdown massimo accettabile,
+drawdown massimo accettabile,
 
- nessun bug critico emerso nei log.
+nessun bug critico emerso nei log.
 
 F. Fase 5 – Preparazione account 100€ semi-live
 ⚠️ NON ANCORA INIZIATA – Piano pronto, da applicare solo quando paper+shadow
@@ -357,90 +405,90 @@ saranno stabili per un po’.
 Qui NON attiviamo ancora ordini automatici reali, ma prepariamo il terreno.
 
 F1. Account & fondi
- Creare (o usare) un sub-account dedicato sull’exchange target.
+Creare (o usare) un sub-account dedicato sull’exchange target.
 
- Depositare solo la cifra del test (es. 100€ in USDT).
+Depositare solo la cifra del test (es. 100€ in USDT).
 
- Verificare che non ci siano:
+Verificare che non ci siano:
 
- posizioni aperte,
+posizioni aperte,
 
- altri asset “strani” sul sub-account.
+altri asset “strani” sul sub-account.
 
 F2. API & permessi
- Creare API key dedicate al sub-account:
+Creare API key dedicate al sub-account:
 
- permessi SOLO per futures/perp necessari,
+permessi SOLO per futures/perp necessari,
 
- nessun permesso di withdraw.
+nessun permesso di withdraw.
 
- Salvare le chiavi in .env del futuro modulo broker (non ancora usato).
+Salvare le chiavi in .env del futuro modulo broker (non ancora usato).
 
- Quando il broker reale sarà integrato:
+Quando il broker reale sarà integrato:
 
- prima fare solo test read-only (es. get balance).
+prima fare solo test read-only (es. get balance).
 
 G. Fase 6 – Go / No-Go per il live automatico
 Blocco più “lontano”, ma conviene fissare i paletti già adesso.
 
 G1. Criteri minimi per pensare al semi-live
- Almeno N (es. 200–300) operazioni paper registrate in LOMS.
+Almeno N (es. 200–300) operazioni paper registrate in LOMS.
 
- Nessun bug critico aperto in:
+Nessun bug critico aperto in:
 
- chiusura posizioni,
+chiusura posizioni,
 
- calcolo PnL,
+calcolo PnL,
 
- /stats.
+/stats.
 
- Shadow Mode con risultati coerenti con:
+Shadow Mode con risultati coerenti con:
 
- snapshot PNG/CSV di RickyBot,
+snapshot PNG/CSV di RickyBot,
 
- analisi offline.
+analisi offline.
 
 G2. Piano di rollback
- Una pagina nel README / runbook con:
+Una pagina nel README / runbook con:
 
- “come spegnere tutto in 60 secondi”,
+“come spegnere tutto in 60 secondi”,
 
- come verificare che nessuna posizione sia rimasta aperta.
+come verificare che nessuna posizione sia rimasta aperta.
 
- Dopo un eventuale incidente:
+Dopo un eventuale incidente:
 
- esportare DB/JSONL,
+esportare DB/JSONL,
 
- scrivere un breve post-mortem tecnico (anche solo per te e Ricky).
+scrivere un breve post-mortem tecnico (anche solo per te e Ricky).
 
 H. Prossimi micro-step consigliati (tutti ancora solo paper)
 Ordine suggerito, tutti ancora in modalità paper:
 
-Tag LOMS paper + doc allineata
+Tag LOMS paper + doc allineata ✅
 
- Creare il tag git loms-paper-shadow-2025-12-01 (o nome equivalente).
+Creato il tag git loms-paper-shadow-v1.0-2025-12-04.
 
- LOMS_CHECKLIST_MASTER e questa Pre-Live Roadmap sono già aggiornate
+LOMS_CHECKLIST_MASTER e questa Pre-Live Roadmap sono allineate
 allo stato PAPER-SERVER + Shadow Mode + Real Price Engine integrato.
 
-Rifinire i profili DEV vs PAPER-SERVER
+Rifinire i profili DEV vs PAPER-SERVER ✅
 
- Profili reali di .env per PC locale e server definiti e testati.
+Profili reali di .env per PC locale e server definiti e testati.
 
- Documentazione aggiornata (README + LOMS_CHECKLIST_MASTER).
+Documentazione aggiornata (README + LOMS_CHECKLIST_MASTER).
 
-Parametri risk lato RickyBot (C2)
+Parametri risk lato RickyBot (C2) ⬜
 
- Decidere se introdurre RISK_MAX_ALERTS_PER_DAY / per simbolo.
+Decidere se introdurre RISK_MAX_ALERTS_PER_DAY / per simbolo.
 
- (Opzionale) Aggiungere solo logging/telemetria in una prima fase,
+(Opzionale) Aggiungere solo logging/telemetria in una prima fase,
 senza bloccare nulla.
 
-Shadow Mode continua
+Shadow Mode continua 🟡
 
- Shadow Mode locale già testata (RickyBot dev → LOMS dev).
+Shadow Mode locale già testata (RickyBot dev → LOMS dev).
 
- Shadow Mode su Hetzner attiva (RickyBot prod → LOMS PAPER-SERVER).
+Shadow Mode su Hetzner attiva (RickyBot prod → LOMS PAPER-SERVER).
 
 [🟡] Lasciare girare Shadow Mode per alcuni giorni e raccogliere /stats
 come base numerica prima di anche solo nominare il semi-live 100€.
@@ -594,3 +642,6 @@ Questa sezione va usata come baseline di riferimento per le prossime giornate
 di Shadow Mode: se in futuro cambiano Tuning, risk o configurazioni, si può
 ripetere la stessa routine e confrontare i numeri con questo snapshot del
 2025-12-02.
+
+yaml
+Copia codice
