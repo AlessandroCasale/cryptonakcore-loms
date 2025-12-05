@@ -9,7 +9,11 @@ from app.db.session import SessionLocal
 from app.db.models import Order as OrderModel, Position as PositionModel
 from app.services.audit import log_bounce_signal
 from app.core.config import settings
+
 from app.services.oms import _normalize_side, check_risk_limits
+from app.services.broker_adapter import NewPositionParams, get_broker_adapter
+
+
 
 
 router = APIRouter()
@@ -64,7 +68,8 @@ async def receive_bounce_signal(
     Riceve un segnale Bounce:
     - lo logga su file JSONL
     - se OMS_ENABLED=True e i limiti di rischio lo permettono,
-      crea un ordine + posizione paper
+      crea un ordine + posizione tramite BrokerAdapter
+      (oggi: BrokerAdapterPaperSim in modalità paper).
     """
 
     # 1) Log su audit (sempre)
@@ -177,7 +182,7 @@ async def receive_bounce_signal(
             "error": "invalid_side",
         }
 
-    # 6) Crea ordine paper
+    # 6) Crea ordine logico (sempre in DB, come prima)
     db_order = OrderModel(
         symbol=signal.symbol,
         side=side,
@@ -191,23 +196,50 @@ async def receive_bounce_signal(
     db.commit()
     db.refresh(db_order)
 
-    # 7) Crea posizione paper associata (live-ready fields inclusi)
-    db_position = PositionModel(
+    # 7) Crea posizione tramite BrokerAdapter (paper vs live)
+    adapter = get_broker_adapter()
+
+    params = NewPositionParams(
         symbol=signal.symbol,
         side=side,
         qty=qty,
         entry_price=entry_price,
-        tp_price=tp_price,
-        sl_price=sl_price,
-        status="open",
         exchange=signal.exchange,
         market_type=DEFAULT_MARKET_TYPE,
         account_label=DEFAULT_ACCOUNT_LABEL,
+        tp_price=tp_price,
+        sl_price=sl_price,
         exit_strategy="tp_sl_static",
     )
-    db.add(db_position)
-    db.commit()
-    db.refresh(db_position)
+
+    broker_result = adapter.open_position(db, params)
+
+    if not broker_result.ok or broker_result.position is None:
+        # In caso di problemi lato broker (es. BROKER_MODE=live ma adapter non implementato)
+        logger.error(
+            {
+                "event": "bounce_broker_open_failed",
+                "symbol": signal.symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "qty": qty,
+                "tp_price": tp_price,
+                "sl_price": sl_price,
+                "reason": broker_result.reason,
+            }
+        )
+
+        # Segnaliamo che il segnale è stato ricevuto ma non è stata aperta posizione
+        return {
+            "received": True,
+            "oms_enabled": True,
+            "risk_ok": False,
+            "error": "broker_open_failed",
+            "broker_reason": broker_result.reason,
+            "order_id": db_order.id,
+        }
+
+    db_position = broker_result.position
 
     logger.info(
         {

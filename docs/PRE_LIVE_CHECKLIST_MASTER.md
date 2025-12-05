@@ -18,6 +18,53 @@ Preparare la coppia **RickyBot + CryptoNakCore LOMS** a un test
 **semi-live con 100€** su Bitget, con rischio ultra-limitato e possibilità di
 rollback immediato.
 
+
+### Safety & Kill-switch (promemoria operativo)
+
+Prima di qualunque passo verso il semi-live / 100€ è obbligatorio verificare che il profilo
+server sia coerente e che il “panic button” sia chiaro.
+
+- Profilo raccomandato PAPER-SERVER prima del live:
+
+  ```env
+  ENVIRONMENT=paper
+  BROKER_MODE=paper
+  OMS_ENABLED=true
+  PRICE_SOURCE=simulator
+  PRICE_MODE=last
+Regola d’oro (riassunto):
+
+BROKER_MODE=paper
+→ LOMS deve usare solo il broker paper (BrokerAdapterPaperSim + MarketSimulator o PriceSource=simulator).
+→ Anche se esiste un BrokerAdapterExchange*, in questo profilo non deve mai inviare ordini reali.
+
+OMS_ENABLED
+
+true → LOMS può aprire nuove posizioni (paper o live a seconda di BROKER_MODE).
+
+false → LOMS non deve aprire nuove posizioni; le posizioni già aperte seguono comunque TP/SL e regole di chiusura.
+
+Panic button (server, versione corta):
+
+SSH su Hetzner, modifica services/cryptonakcore/.env:
+
+env
+Copia codice
+BROKER_MODE=paper
+OMS_ENABLED=false
+Riavvia LOMS nella sessione loms-paper (CTRL+C, poi uvicorn app.main:app ...).
+
+(Facoltativo ma consigliato) Ferma le sessioni tmux di RickyBot (rickybot-bitget, rickybot-bybit).
+
+Controlla con gli strumenti:
+
+python tools/check_health.py → Environment=paper, Broker mode=paper, OMS enabled=False
+
+python tools/print_stats.py e /positions → nessuna posizione indesiderata.
+
+Per tutti i dettagli completi vedi la sezione
+“Safety & Kill-switch – BROKER_MODE / OMS_ENABLED” in docs/LOMS_CHECKLIST_MASTER.md.
+
 ---
 
 ## 1. Stato di partenza

@@ -56,6 +56,139 @@ Legenda stato:
 ⬜ da fare / idea parcheggiata  
 
 ---
+## Safety & Kill-switch – BROKER_MODE / OMS_ENABLED
+
+Obiettivo: avere regole **esplicite** e un “panic button” chiaro per evitare qualunque ordine reale indesiderato.
+
+### 1. Semantica ufficiale
+
+- `BROKER_MODE`
+  - `BROKER_MODE=paper`
+    - LOMS deve usare **solo** il broker paper:
+      - `BrokerAdapterPaperSim` + `MarketSimulator` oppure `PriceSource=simulator`.
+    - Anche se in futuro esisterà un `BrokerAdapterExchange*`, in questo profilo **non deve mai** inviare ordini reali all’exchange.
+  - `BROKER_MODE=live`  
+    - Profilo riservato al futuro semi-live / live.
+    - Solo in questo caso LOMS potrà usare `BrokerAdapterExchange*` (Bitget/Bybit) per creare ordini reali.
+    - Prima di usare `BROKER_MODE=live` devono essere soddisfatti i criteri della “Pre-Live Roadmap”.
+
+- `OMS_ENABLED`
+  - `OMS_ENABLED=true`
+    - LOMS **accetta nuovi segnali** (`/signals/bounce`) e può creare nuove posizioni (paper o live a seconda di `BROKER_MODE`).
+  - `OMS_ENABLED=false`
+    - LOMS **non deve creare nuove posizioni** dai segnali in ingresso.
+    - Le posizioni già aperte continuano a seguire le regole di chiusura (TP/SL, scheduler, ecc.).
+    - In caso di emergenza, dopo aver messo `OMS_ENABLED=false` va sempre verificato che:
+      - non ci siano più posizioni aperte indesiderate su `/positions`,
+      - non ci siano posizioni aperte indesiderate sull’exchange (quando ci sarà il profilo live).
+
+> Regola d’oro:  
+> - `BROKER_MODE` decide **che tipo di broker** può essere usato (paper vs live).  
+> - `OMS_ENABLED` decide se LOMS **può aprire nuove posizioni** oppure no.
+
+---
+
+### 2. Panic button – Procedura di emergenza (server PAPER-SERVER)
+
+Caso d’uso: “qualcosa non torna, voglio essere sicuro che da adesso in poi LOMS non apra più niente”.
+
+1. **SSH sul server Hetzner**
+
+   ```bash
+   ssh root@<IP_SERVER>
+Impostare OMS_ENABLED=false (e assicurarsi che BROKER_MODE=paper)
+
+bash
+Copia codice
+cd ~/cryptonakcore-loms/services/cryptonakcore
+nano .env
+Nel file .env lato server assicurarsi che sia così:
+
+env
+Copia codice
+BROKER_MODE=paper
+OMS_ENABLED=false
+In PAPER-SERVER questi valori dovrebbero essere sempre:
+
+BROKER_MODE=paper
+
+OMS_ENABLED=true in condizioni normali
+
+OMS_ENABLED=false in emergenza o manutenzione.
+
+Riavviare LOMS per applicare i cambi
+
+Attacca alla sessione tmux di LOMS:
+
+bash
+Copia codice
+tmux attach -t loms-paper
+Ferma uvicorn con CTRL+C.
+
+Riavvia uvicorn da services/cryptonakcore:
+
+bash
+Copia codice
+cd ~/cryptonakcore-loms/services/cryptonakcore
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+Staccati da tmux con CTRL+b, poi d.
+
+(Opzionale ma consigliato) Fermare anche RickyBot
+
+Se vuoi essere sicuro al 100% che in quell’istante non entrino altri segnali:
+
+bash
+Copia codice
+tmux ls
+tmux kill-session -t rickybot-bitget
+tmux kill-session -t rickybot-bybit
+Check finale
+
+Verifica lo stato LOMS:
+
+bash
+Copia codice
+cd ~/cryptonakcore-loms
+source .venv/bin/activate
+python tools/check_health.py
+Controlla che mostri:
+
+Environment : paper
+
+Broker mode : paper
+
+OMS enabled : False
+
+Controlla posizioni:
+
+bash
+Copia codice
+python tools/print_stats.py
+curl -s http://127.0.0.1:8000/positions/ | python -m json.tool
+In profilo paper l’exchange reale non è toccato, ma quando ci sarà il profilo live andrà sempre fatto anche un check lato exchange.
+
+3. Profilo raccomandato attuale (PAPER-SERVER)
+Sul PAPER-SERVER la combinazione raccomandata è:
+
+env
+Copia codice
+ENVIRONMENT=paper
+BROKER_MODE=paper
+OMS_ENABLED=true
+PRICE_SOURCE=simulator
+PRICE_MODE=last
+In caso di manutenzione o emergenza:
+
+env
+Copia codice
+ENVIRONMENT=paper
+BROKER_MODE=paper
+OMS_ENABLED=false
+PRICE_SOURCE=simulator
+PRICE_MODE=last
+BROKER_MODE=live non va usato finché non sono soddisfatti tutti i requisiti
+della “Pre-Live Roadmap (100€ semi-live)” e della “Roadmap v1 piattaforma chiusa”.
+
 
 ## 0. Macro-obiettivo LOMS
 

@@ -243,12 +243,54 @@ prima di anche solo pensarci.
     - PAPER-SERVER: `ENV=paper MAX_SIZE_PER_POSITION_USDT = 1000.0`;
   - i test con `tools/test_notify_loms.py` confermano `risk_ok=True` quando notional ≤ limite.
 
-### C2. Parametri risk lato RickyBot  **(TODO – pre-100€)**
+### C2. Parametri risk lato RickyBot  **(COMPLETATO – throttling v0 sugli alert)**
 
-- [ ] Definire in `.env` RickyBot (solo dev/live):
-  - [ ] `RISK_MAX_ALERTS_PER_DAY`
-  - [ ] `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY`
-- [ ] (Opzionale) Aggiungere un contatore nel runner / audit per questi limiti.
+- [x] Definire in `.env` RickyBot (dev/prod):
+
+  - [x] `RISK_MAX_ALERTS_PER_DAY`
+  - [x] `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY`
+
+  con semantica:
+
+  - `0` = nessun limite (throttling disattivato),
+  - `>0` = soglia massima di alert al giorno / per simbolo (reset giornaliero in UTC).
+
+- [x] Implementare logica di throttling v0 nel notifier (solo sugli alert):
+
+  - contatori in-memory per:
+    - totale alert del giorno (`total_today`),
+    - alert per singolo simbolo (`symbol_today`),
+    - legati alla data in UTC.
+  - se entrambi i limiti sono 0:
+    - nessuna limitazione, il runner si comporta come prima.
+  - se almeno uno >0:
+    - prima di inviare l’alert, controlla:
+      - se `total_today >= RISK_MAX_ALERTS_PER_DAY` → l’alert viene bloccato,
+      - se `symbol_today >= RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY` → l’alert viene bloccato.
+    - in caso di blocco:
+      - l’alert NON viene mandato a Telegram,
+      - il segnale NON viene mandato a LOMS,
+      - viene loggato un evento strutturato `alert_throttled` (env, symbol, conteggi, soglie, motivo).
+    - in caso di ok:
+      - l’alert viene inviato normalmente (Telegram + LOMS, se `LOMS_ENABLED=true`),
+      - i contatori vengono incrementati e viene loggato `alert_counter_increment`.
+
+- [x] Testare la configurazione con tool dedicato:
+
+  - `python tools/test_alert_throttle_loop.py` (DEV locale) conferma che:
+    - con `RISK_MAX_ALERTS_PER_DAY=3`, `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY=2`:
+      - i primi 2 alert passano,
+      - dal 3° in poi compaiono log `alert_throttled` (reason="per_symbol").
+    - con entrambi = 0:
+      - nessun evento di throttle; tutti gli alert passano.
+
+📌 Profilo attuale:
+
+- In DEV puoi giocare con valori diversi per fare test.
+- Sul server PAPER/Shadow Mode, i limiti restano **impostati a 0/0**:
+  - nessun cambiamento di comportamento rispetto a prima,
+  - i parametri saranno usati solo quando, in fase semi-live 100€, deciderai consapevolmente dei massimali giornalieri di alert.
+
 
 ### C3. Controlli “kill switch”  **(TODO – pre-100€)**
 
@@ -361,7 +403,7 @@ mentre eventualmente fai ancora trading manuale per confronto.
 
 E1. Setup shadow
 Avviare LOMS su una macchina “vicina” all’ambiente reale (Hetzner rickybot-01).
-(Fatto: PAPER-SERVER attivo dal 2025-12-01)
+(Fatto: PAPER-SERVER attivo dal 2025-12-01).
 
 Configurare RickyBot con:
 
@@ -414,6 +456,54 @@ Verificare che non ci siano:
 posizioni aperte,
 
 altri asset “strani” sul sub-account.
+
+F1bis. Profilo OMS per il semi-live 100€ (ACCOUNT_LABEL ufficiale)
+Nome profilo OMS / ACCOUNT_LABEL (LOMS): rickybot-100
+
+Exchange target iniziale: Bitget
+
+Sub-account sull’exchange:
+
+sub-account creato su Bitget con etichetta rickybot-100 (profilo dedicato).
+
+Questo sub-account deve restare:
+
+separato dall’account principale,
+
+con fondi limitati (100€),
+
+senza altre strategie o trading manuale “mischiato”.
+
+Associazione tra LOMS e Bitget:
+
+in LOMS, il campo account_label delle Position per il semi-live sarà rickybot-100;
+
+a livello di config (quando si passerà a BROKER_MODE=live):
+
+ACCOUNT_LABEL=rickybot-100 nel .env LOMS relativo al profilo semi-live;
+
+mapping 1:1 tra quel profilo e il sub-account Bitget rickybot-100.
+
+Stato attuale (oggi):
+
+sub-account Bitget rickybot-100 creato ✅;
+
+nessun fondi ancora depositato (i 100€ verranno caricati solo quando:
+
+Shadow Mode sarà stabile per N giorni,
+
+risk engine + throttling lato RickyBot saranno completati,
+
+Go/No-Go formalizzato).
+
+Nota operativa:
+
+finché siamo in Shadow Mode paper:
+
+sul PAPER-SERVER l’ACCOUNT_LABEL effettivo resterà qualcosa tipo paper-shadow-v1.0;
+
+rickybot-100 rimane solo documentato (nessun utilizzo reale),
+pronto per il “profilo live” che verrà attivato più avanti.
 
 F2. API & permessi
 Creare API key dedicate al sub-account:
@@ -642,6 +732,3 @@ Questa sezione va usata come baseline di riferimento per le prossime giornate
 di Shadow Mode: se in futuro cambiano Tuning, risk o configurazioni, si può
 ripetere la stessa routine e confrontare i numeri con questo snapshot del
 2025-12-02.
-
-yaml
-Copia codice

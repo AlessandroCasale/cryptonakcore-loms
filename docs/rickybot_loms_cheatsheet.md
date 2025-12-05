@@ -52,8 +52,11 @@ Preambolo – Stato attuale (Shadow Mode agganciata)
   - LOMS PAPER-SERVER con auto-close TP/SL e `/stats` funzionante.
   - Integrazione RickyBot → LOMS testata:
     - con tool di test,
-    - con almeno un alert reale.
+    - con alert reali.
   - Modalità **Shadow Mode** attiva: ordini solo nel DB paper di LOMS, non sull’exchange.
+  - **Stack “paper + shadow v1.0” congelato**:
+    - RickyBot: tag `rickybot-loms-v1.0-2025-12-02`
+    - LOMS   : tag `loms-paper-shadow-v1.0-2025-12-04`
 
 - 📌 **Nota Real Price (DEV vs PAPER-SERVER)**  
   - **DEV locale (Windows)**  
@@ -74,6 +77,23 @@ Preambolo – Stato attuale (Shadow Mode agganciata)
     - `MAX_SIZE_PER_POSITION_USDT = 1000.0` (valore realistico confermato lato server).
     - LOMS lavora ancora con **MarketSimulator v2** per TP/SL (paper puro),  
       mentre ascolta comunque tutti i segnali reali da RickyBot in Shadow Mode.
+
+- 🛡️ **Nota Risk & Throttling (RickyBot → alert)**  
+  - RuntimeConfig ora include:
+    - `RISK_MAX_ALERTS_PER_DAY`
+    - `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY`
+    - Semantica: `0 = disattivato` (profilo attuale sia in DEV che su SERVER).
+  - Throttling v0 implementato in `notify_bounce_alert`:
+    - contatori **in-memory** per giorno (UTC) e per simbolo,
+    - log strutturati:
+      - `alert_throttle_config`
+      - `alert_counter_increment`
+      - `alert_throttled`
+    - se sopra soglia → l’alert viene **skippato** (nessun Telegram, nessuna chiamata LOMS).
+  - Test DEV:
+    - `python tools/test_notify_notifier_loms.py`
+    - `python tools/test_alert_throttle_loop.py`  
+      (5 alert di fila per lo stesso simbolo → vedi scattare `alert_throttled` con limiti bassi, es. 3/2).
 
 0) REPO, VENV, GIT                              0) SSH, REPO, VENV, GIT
 ----------------------------------------        ------------------------------------------
@@ -121,6 +141,17 @@ Apri .env / .env.local (VS Code)               Controlla/greppa env RickyBot
 cd C:\Projects\crypto-bot                      cd ~/RickyBot
 code .env                                      grep -E '^(EXCHANGE|MODE|INTERVAL_MIN|GAINERS_TOP_N)' .env
 code .env.local                                grep -E '^(LOMS_ENABLED|LOMS_BASE_URL)' .env
+
+🛡️ Risk throttling (solo se vuoi attivarlo in DEV)
+----------------------------------------
+In `.env.local`:
+- Profilo normale (OFF):
+  - `RISK_MAX_ALERTS_PER_DAY=0`
+  - `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY=0`
+- Profilo test (esempio):
+  - `RISK_MAX_ALERTS_PER_DAY=3`
+  - `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY=2`
+Verifica sempre i valori effettivi via `runtime_config_inspector`.
 
 A2) AVVIO RUNNER DEV                           A2) AVVIO RUNNER IN TMUX (SERVER)
 ----------------------------------------        ------------------------------------------
@@ -170,6 +201,16 @@ Tail log locale (se log su file)               Tail log server (se hai log su fi
 Get-Content .\logs\ross123.log -Tail 50        tail -n 50 logs/ross123.log
 Get-Content .\logs\ross123.log -Wait           tail -f logs/ross123.log
 
+🔁 Test alert throttling (DEV)
+----------------------------------------
+- Assicurati in `.env.local`:
+  - `RISK_MAX_ALERTS_PER_DAY=3`
+  - `RISK_MAX_ALERTS_PER_SYMBOL_PER_DAY=2`
+- Lancia:
+  - `python tools\test_alert_throttle_loop.py`
+- Atteso:
+  - primi 2 alert passano (log `alert_counter_increment` nei log JSON),
+  - dal 3° in poi log `alert_throttled` con `reason="per_symbol"` e nessun nuovo alert verso Telegram/LOMS.
 
 A5) SNAPSHOT – LOCALE DEV                      A5) SNAPSHOT – SERVER
 ----------------------------------------        ------------------------------------------

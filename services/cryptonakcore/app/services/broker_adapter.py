@@ -6,6 +6,14 @@ from typing import Protocol, Optional
 from sqlalchemy.orm import Session
 
 from app.db.models import Position
+import logging
+
+from app.core.config import settings
+
+
+
+
+logger = logging.getLogger("broker_adapter")
 
 
 @dataclass
@@ -146,3 +154,94 @@ class BrokerAdapterPaperSim:
         db.refresh(position)
 
         return BrokerCloseResult(ok=True, position=position)
+    
+class BrokerAdapterExchangeStub:
+    """
+    Stub per BrokerAdapter "live" / exchange.
+
+    ⚠️ IMPORTANTE:
+    - Non manda NESSUN ordine reale.
+    - Serve solo come placeholder architetturale per il futuro BrokerAdapterExchange
+      che parlerà con Bybit/Bitget.
+    - Se qualcuno imposta BROKER_MODE=live oggi, otterrà sempre ok=False e
+      nessuna Position creata.
+    """
+
+    def open_position(self, db: Session, params: NewPositionParams) -> BrokerOrderResult:
+        logger.error(
+            {
+                "event": "broker_exchange_stub_open_called",
+                "symbol": params.symbol,
+                "side": params.side,
+                "qty": params.qty,
+                "reason": "BROKER_MODE=live ma BrokerAdapterExchange non è ancora implementato",
+            }
+        )
+        return BrokerOrderResult(
+            ok=False,
+            reason="broker_exchange_not_implemented",
+            position=None,
+        )
+
+    def close_position(
+        self,
+        db: Session,
+        position: Position,
+        close_price: Optional[float] = None,
+        reason: Optional[str] = None,
+    ) -> BrokerCloseResult:
+        logger.error(
+            {
+                "event": "broker_exchange_stub_close_called",
+                "position_id": position.id,
+                "status": position.status,
+                "reason": "BROKER_MODE=live ma BrokerAdapterExchange non è ancora implementato",
+            }
+        )
+        return BrokerCloseResult(
+            ok=False,
+            reason="broker_exchange_not_implemented",
+            position=position,
+        )
+    
+def get_broker_adapter() -> BrokerAdapter:
+    """
+    Factory centrale per ottenere il BrokerAdapter corretto in base alle Settings.
+
+    - BROKER_MODE=paper (default) -> BrokerAdapterPaperSim
+    - BROKER_MODE=live            -> BrokerAdapterExchangeStub (per ora solo stub)
+    - altri valori                -> ValueError
+    """
+    mode = (settings.broker_mode or "paper").lower()
+
+    if mode == "paper":
+        logger.info(
+            {
+                "event": "broker_adapter_selected",
+                "mode": mode,
+                "adapter": "BrokerAdapterPaperSim",
+            }
+        )
+        return BrokerAdapterPaperSim()
+
+    if mode == "live":
+        logger.warning(
+            {
+                "event": "broker_adapter_selected",
+                "mode": mode,
+                "adapter": "BrokerAdapterExchangeStub",
+                "note": "adapter live non ancora implementato, nessun ordine reale verrà inviato",
+            }
+        )
+        return BrokerAdapterExchangeStub()
+
+    # Difesa extra in caso di typo in BROKER_MODE
+    logger.error(
+        {
+            "event": "broker_adapter_invalid_mode",
+            "mode": mode,
+        }
+    )
+    raise ValueError(f"Unsupported BROKER_MODE={mode!r}")
+
+
