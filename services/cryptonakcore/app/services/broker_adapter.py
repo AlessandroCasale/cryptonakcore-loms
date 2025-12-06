@@ -2,18 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol, Optional
+from datetime import datetime
+import logging
 
 from sqlalchemy.orm import Session
 
 from app.db.models import Position
-import logging
-
 from app.core.config import settings
 
 
-
-
 logger = logging.getLogger("broker_adapter")
+
+
+def _normalize_side(side: str) -> str:
+    """
+    Normalizza il side:
+    - "buy"  / "long"  → "long"
+    - "sell" / "short" → "short"
+    """
+    s = (side or "").lower()
+    if s in ("buy", "long"):
+        return "long"
+    if s in ("sell", "short"):
+        return "short"
+    return s
 
 
 @dataclass
@@ -94,11 +106,8 @@ class BrokerAdapterPaperSim:
     """
     Implementazione base “paper puro” che lavora solo sul DB locale.
 
-    NOTA IMPORTANTE:
-    - per ora NON è ancora usata da /signals/bounce
-    - crea direttamente una Position senza passare per l’exchange
-    - serve come primo mattoncino per migrare la logica esistente
-      verso il pattern BrokerAdapter.
+    - crea una Position direttamente in DB (paper)
+    - gestisce la chiusura calcolando il PnL in base a entry_price/qty/side
     """
 
     def open_position(self, db: Session, params: NewPositionParams) -> BrokerOrderResult:
@@ -130,11 +139,15 @@ class BrokerAdapterPaperSim:
         reason: Optional[str] = None,
     ) -> BrokerCloseResult:
         """
-        Versione semplificata: chiude la posizione al prezzo passato.
-        Per ora NON calcola il PnL (lo fa già auto_close_positions e
-        l’endpoint /positions/{id}/close).
+        Chiude una posizione in modalità paper.
 
-        La teniamo come hook per il futuro (live / exchange).
+        - richiede close_price (prelevato da PriceSource/ExitEngine)
+        - aggiorna:
+            status       -> 'closed'
+            closed_at    -> now UTC
+            close_price  -> close_price
+            auto_close_reason -> reason (tp/sl/manual/...)
+            pnl          -> calcolato in base a side, entry_price, qty
         """
         if position.status != "open":
             return BrokerCloseResult(
@@ -143,18 +156,60 @@ class BrokerAdapterPaperSim:
                 position=position,
             )
 
-        if close_price is not None:
-            position.close_price = float(close_price)
+        if close_price is None:
+            return BrokerCloseResult(
+                ok=False,
+                reason="close_price_required_for_paper",
+                position=position,
+            )
 
+        now = datetime.utcnow()
+        exit_price = float(close_price)
+
+        position.close_price = exit_price
+        position.closed_at = now
         position.status = "closed"
+
         if reason:
             position.auto_close_reason = reason
+
+        # Calcolo PnL
+        try:
+            entry = float(position.entry_price)
+        except (TypeError, ValueError):
+            entry = 0.0
+
+        try:
+            qty = float(position.qty)
+        except (TypeError, ValueError):
+            qty = 0.0
+
+        side = _normalize_side(getattr(position, "side", ""))
+
+        if side == "long":
+            pnl = (exit_price - entry) * qty
+        elif side == "short":
+            pnl = (entry - exit_price) * qty
+        else:
+            # side sconosciuto → fallback long ma logghiamo
+            logger.warning(
+                {
+                    "event": "broker_paper_unknown_side_on_close",
+                    "position_id": position.id,
+                    "symbol": position.symbol,
+                    "raw_side": position.side,
+                }
+            )
+            pnl = (exit_price - entry) * qty
+
+        position.pnl = pnl
 
         db.commit()
         db.refresh(position)
 
         return BrokerCloseResult(ok=True, position=position)
-    
+
+
 class BrokerAdapterExchangeStub:
     """
     Stub per BrokerAdapter "live" / exchange.
@@ -203,7 +258,8 @@ class BrokerAdapterExchangeStub:
             reason="broker_exchange_not_implemented",
             position=position,
         )
-    
+
+
 def get_broker_adapter() -> BrokerAdapter:
     """
     Factory centrale per ottenere il BrokerAdapter corretto in base alle Settings.
@@ -243,5 +299,3 @@ def get_broker_adapter() -> BrokerAdapter:
         }
     )
     raise ValueError(f"Unsupported BROKER_MODE={mode!r}")
-
-

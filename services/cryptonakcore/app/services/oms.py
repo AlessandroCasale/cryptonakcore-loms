@@ -23,8 +23,9 @@ from app.services.exchange_client import (
     get_default_exchange_client,
 )
 from app.services.broker_adapter import (
-    BrokerAdapterPaperSim,
     NewPositionParams,
+    get_broker_adapter,
+    BrokerAdapter,
 )
 
 logger = logging.getLogger("oms")
@@ -72,19 +73,15 @@ def _get_price_source():
     return SimulatedPriceSource(MarketSimulator)
 
 
-def _get_broker_adapter() -> BrokerAdapterPaperSim:
+def _get_broker_adapter() -> BrokerAdapter:
     """
     Risolve il BrokerAdapter da usare a runtime.
 
-    Per ora:
-    - BROKER_MODE=paper -> BrokerAdapterPaperSim (gestione Position in DB)
-
-    In futuro:
-    - potremo aggiungere adapter diversi per SHADOW / LIVE e fare uno switch
-      in base a settings.broker_mode / profilo di rischio.
+    Usa la factory centrale get_broker_adapter(), che sceglie
+    l'implementazione corretta in base a BROKER_MODE (paper/live/...).
+    Oggi in pratica restituisce BrokerAdapterPaperSim.
     """
-    # In questa fase abbiamo solo il profilo paper.
-    return BrokerAdapterPaperSim()
+    return get_broker_adapter()
 
 
 def check_risk_limits(
@@ -208,7 +205,6 @@ def check_risk_limits(
     return True, None
 
 
-
 def handle_bounce_signal(db: Session, signal) -> dict:
     """
     Gestisce un segnale Bounce:
@@ -216,7 +212,7 @@ def handle_bounce_signal(db: Session, signal) -> dict:
     - se OMS_ENABLED = False → ack ma non apre nulla
     - applica il risk engine
     - costruisce i parametri posizione
-    - apre la posizione via BrokerAdapterPaperSim
+    - apre la posizione via BrokerAdapter
     - restituisce info su posizione aperta (per ora order_id=None)
     """
 
@@ -372,7 +368,7 @@ def auto_close_positions(db: Session) -> None:
     Orchestrazione:
     - legge il prezzo tramite PriceSource (simulator/exchange)
     - valuta la posizione con StaticTpSlPolicy (ExitPolicy)
-    - applica le ExitAction di tipo CLOSE_POSITION aggiornando la Position
+    - applica le ExitAction di tipo CLOSE_POSITION via BrokerAdapter
     """
 
     open_positions = db.query(Position).filter(Position.status == "open").all()
@@ -385,6 +381,9 @@ def auto_close_positions(db: Session) -> None:
 
     # Exit policy attuale (TP/SL statici)
     policy = StaticTpSlPolicy()
+
+    # Broker adapter (paper / live, in futuro)
+    adapter = _get_broker_adapter()
 
     for pos in open_positions:
         age_sec = None
@@ -449,34 +448,45 @@ def auto_close_positions(db: Session) -> None:
         action = close_actions[0]
         reason = action.close_reason or "tp_sl"
 
-        # ✅ NIENTE Order di chiusura per ora, aggiorniamo solo la Position
-        pos.status = "closed"
-        pos.closed_at = now
-        pos.close_price = current_price
-        pos.auto_close_reason = reason
+        # Chiudiamo la posizione tramite BrokerAdapter (paper)
+        broker_result = adapter.close_position(
+            db,
+            position=pos,
+            close_price=current_price,
+            reason=reason,
+        )
 
-        # Calcolo PnL (stessa logica di prima)
-        entry = float(pos.entry_price)
-        qty = float(pos.qty)
+        if not broker_result.ok or broker_result.position is None:
+            logger.error(
+                {
+                    "event": "position_close_failed_via_broker",
+                    "symbol": pos.symbol,
+                    "pos_id": getattr(pos, "id", None),
+                    "reason": broker_result.reason,
+                    "price_source": price_source_label,
+                    "price_mode": str(price_mode),
+                }
+            )
+            # Non fermiamo il watcher: passiamo alla prossima posizione
+            continue
 
-        side = _normalize_side(pos.side)
-        if side == "long":
-            pos.pnl = (current_price - entry) * qty
-        else:  # short
-            pos.pnl = (entry - current_price) * qty
+        closed_pos = broker_result.position
 
-        db.commit()
+        entry = float(closed_pos.entry_price)
+        qty = float(closed_pos.qty)
+        exit_price = float(closed_pos.close_price or current_price)
+        pnl_val = float(closed_pos.pnl) if closed_pos.pnl is not None else None
 
         logger.info(
             {
                 "event": "position_closed",
-                "reason": reason,
-                "symbol": pos.symbol,
+                "reason": closed_pos.auto_close_reason or reason,
+                "symbol": closed_pos.symbol,
                 "entry": entry,
-                "exit": current_price,
-                "pnl": float(pos.pnl),
+                "exit": exit_price,
+                "pnl": pnl_val,
                 "qty": qty,
-                "pos_id": pos.id,
+                "pos_id": closed_pos.id,
                 "age_sec": age_sec,
                 "price_source": price_source_label,
                 "price_mode": str(price_mode),

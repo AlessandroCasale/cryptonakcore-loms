@@ -154,33 +154,49 @@ async def receive_bounce_signal(
         }
 
     # 5) Calcolo TP/SL in base a price e percentuali
-    tp_pct = signal.tp_pct if signal.tp_pct is not None else DEFAULT_TP_PCT
-    sl_pct = signal.sl_pct if signal.sl_pct is not None else DEFAULT_SL_PCT
+    # Caso speciale: se tp_pct e sl_pct sono ENTRAMBI None → nessun TP/SL
+    tp_pct_input = signal.tp_pct
+    sl_pct_input = signal.sl_pct
 
-    tp_price: float | None
-    sl_price: float | None
+    tp_price: float | None = None
+    sl_price: float | None = None
 
-    if side == "long":
-        tp_price = entry_price * (1.0 + tp_pct / 100.0)
-        sl_price = entry_price * (1.0 - sl_pct / 100.0) if sl_pct is not None else None
-    elif side == "short":
-        tp_price = entry_price * (1.0 - tp_pct / 100.0)
-        sl_price = entry_price * (1.0 + sl_pct / 100.0) if sl_pct is not None else None
-    else:
-        # Difesa extra (vedi commento sopra)
+    if tp_pct_input is None and sl_pct_input is None:
+        # dev / lab: posizione gestita solo da chiusure manuali o ExitEngine avanzati
         logger.info(
             {
-                "event": "bounce_invalid_side_post_tp_sl",
+                "event": "bounce_no_tp_sl_configured",
                 "symbol": signal.symbol,
-                "raw_side": signal.side,
+                "side": side,
             }
         )
-        return {
-            "received": True,
-            "oms_enabled": True,
-            "risk_ok": False,
-            "error": "invalid_side",
-        }
+    else:
+        # Comportamento standard: usa i default se un lato manca
+        tp_pct = tp_pct_input if tp_pct_input is not None else DEFAULT_TP_PCT
+        sl_pct = sl_pct_input if sl_pct_input is not None else DEFAULT_SL_PCT
+
+        if side == "long":
+            tp_price = entry_price * (1.0 + tp_pct / 100.0)
+            sl_price = entry_price * (1.0 - sl_pct / 100.0) if sl_pct is not None else None
+        elif side == "short":
+            tp_price = entry_price * (1.0 - tp_pct / 100.0)
+            sl_price = entry_price * (1.0 + sl_pct / 100.0) if sl_pct is not None else None
+        else:
+            # Difesa extra (vedi commento sopra)
+            logger.info(
+                {
+                    "event": "bounce_invalid_side_post_tp_sl",
+                    "symbol": signal.symbol,
+                    "raw_side": signal.side,
+                }
+            )
+            return {
+                "received": True,
+                "oms_enabled": True,
+                "risk_ok": False,
+                "error": "invalid_side",
+            }
+
 
     # 6) Crea ordine logico (sempre in DB, come prima)
     db_order = OrderModel(

@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.db.models import Position as PositionModel
 from app.core.config import settings
-from app.services.oms import _normalize_side, _get_price_source
+from app.services.oms import _get_price_source  # _normalize_side non serve più qui
 from app.services.pricing import select_price, PriceSourceError
-
+from app.services.broker_adapter import get_broker_adapter
 
 router = APIRouter()
 logger = logging.getLogger("api.positions")
@@ -98,11 +98,9 @@ async def close_position(position_id: int, db: Session = Depends(get_db)):
 
     - legge il prezzo corrente dalla sorgente configurata (PriceSource)
       usando lo stesso resolver dell'OMS (_get_price_source + PRICE_MODE)
-    - calcola il PnL in base a entry_price, qty e side
-    - aggiorna:
-        status -> 'closed'
-        closed_at, close_price, pnl
-        auto_close_reason -> 'manual'
+    - delega la chiusura al BrokerAdapter (close_price + reason="manual"),
+      che aggiorna:
+        status, closed_at, close_price, pnl, auto_close_reason
     """
 
     position = (
@@ -122,7 +120,6 @@ async def close_position(position_id: int, db: Session = Depends(get_db)):
     price_source = _get_price_source()
     price_mode = settings.price_mode
     price_source_label = str(settings.price_source)
-    now = datetime.utcnow()
 
     try:
         quote = price_source.get_quote(position.symbol)
@@ -164,52 +161,46 @@ async def close_position(position_id: int, db: Session = Depends(get_db)):
             detail="Internal error during manual close",
         )
 
-    # Calcolo PnL (riusiamo la stessa normalizzazione del side di OMS)
-    entry = float(position.entry_price)
-    qty = float(position.qty)
-    side = _normalize_side(position.side)
+    # Chiudiamo via BrokerAdapter (paper oggi, live domani)
+    adapter = get_broker_adapter()
+    broker_result = adapter.close_position(
+        db,
+        position=position,
+        close_price=current_price,
+        reason="manual",
+    )
 
-    if side == "long":
-        pnl = (current_price - entry) * qty
-    elif side == "short":
-        pnl = (entry - current_price) * qty
-    else:
-        # side sconosciuto → chiudiamo comunque, ma logghiamo il problema
-        logger.warning(
+    if not broker_result.ok or broker_result.position is None:
+        logger.error(
             {
-                "event": "manual_close_unknown_side",
+                "event": "manual_close_broker_failed",
                 "position_id": position_id,
                 "symbol": position.symbol,
-                "raw_side": position.side,
+                "reason": broker_result.reason,
+                "price_source": price_source_label,
+                "price_mode": str(price_mode),
             }
         )
-        # fallback: consideriamo long
-        pnl = (current_price - entry) * qty
+        raise HTTPException(
+            status_code=500,
+            detail="Broker close failed",
+        )
 
-    position.pnl = pnl
-
-    # Aggiorniamo stato e metadati di chiusura
-    position.status = "closed"
-    position.closed_at = now
-    position.close_price = current_price
-    position.auto_close_reason = "manual"
-
-    db.commit()
-    db.refresh(position)
+    closed_pos = broker_result.position
 
     logger.info(
         {
             "event": "position_closed_manual",
-            "position_id": position.id,
-            "symbol": position.symbol,
-            "side": side,
-            "entry": entry,
-            "exit": current_price,
-            "pnl": float(position.pnl) if position.pnl is not None else None,
-            "qty": qty,
+            "position_id": closed_pos.id,
+            "symbol": closed_pos.symbol,
+            "side": closed_pos.side,
+            "entry": float(closed_pos.entry_price) if closed_pos.entry_price is not None else None,
+            "exit": float(closed_pos.close_price) if closed_pos.close_price is not None else None,
+            "pnl": float(closed_pos.pnl) if closed_pos.pnl is not None else None,
+            "qty": float(closed_pos.qty),
             "price_source": price_source_label,
             "price_mode": str(price_mode),
         }
     )
 
-    return position
+    return closed_pos
